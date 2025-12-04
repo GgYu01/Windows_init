@@ -178,6 +178,111 @@ function Set-ExecutionPolicies {
     }
 }
 
+function Install-WindowsTerminal {
+    # Install or provision Windows Terminal from a local preinstall kit.
+    $kitRoot = 'C:\Windows\Setup\Scripts\WindowsTerminal'
+
+    if (-not (Test-Path -LiteralPath $kitRoot)) {
+        Write-LogWarn "Windows Terminal kit root '$kitRoot' not found; skipping Windows Terminal installation."
+        return
+    }
+
+    try {
+        $bundle  = Get-ChildItem -Path $kitRoot -Filter '*.msixbundle' -ErrorAction Stop | Select-Object -First 1
+    }
+    catch {
+        $bundle = $null
+    }
+
+    try {
+        $license = Get-ChildItem -Path $kitRoot -Filter '*_License*.xml' -ErrorAction Stop | Select-Object -First 1
+    }
+    catch {
+        $license = $null
+    }
+
+    $deps = Get-ChildItem -Path $kitRoot -Filter 'Microsoft.UI.Xaml.2.8_*_*.appx' -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName
+
+    if (-not $bundle) {
+        Write-LogWarn "Windows Terminal bundle (*.msixbundle) not found under '$kitRoot'; skipping."
+        return
+    }
+
+    if (-not $license) {
+        Write-LogWarn "Windows Terminal license XML not found under '$kitRoot'; skipping."
+        return
+    }
+
+    Write-LogInfo ("Windows Terminal bundle: '{0}'" -f $bundle.FullName)
+    Write-LogInfo ("Windows Terminal license: '{0}'" -f $license.FullName)
+
+    if (-not $deps -or $deps.Count -eq 0) {
+        Write-LogWarn "No Microsoft.UI.Xaml dependency packages found under '$kitRoot'; attempting installation without explicit dependencies."
+    }
+
+    # Provision for all future users, if possible.
+    try {
+        Write-LogInfo "Provisioning Windows Terminal as an Appx provisioned package (Online)..."
+        Add-AppxProvisionedPackage -Online `
+            -PackagePath $bundle.FullName `
+            -LicensePath $license.FullName `
+            -DependencyPackagePath $deps `
+            -ErrorAction Stop | Out-Null
+
+        Write-LogInfo "Windows Terminal provisioned successfully."
+    }
+    catch {
+        Write-LogError "Add-AppxProvisionedPackage for Windows Terminal failed: $($_.Exception.Message)"
+    }
+
+    # Ensure the current Administrator session has Windows Terminal installed.
+    try {
+        Write-LogInfo "Installing Windows Terminal for the current user via Add-AppxPackage..."
+        Add-AppxPackage -Path $bundle.FullName `
+                        -LicensePath $license.FullName `
+                        -DependencyPath $deps `
+                        -ErrorAction Stop | Out-Null
+
+        Write-LogInfo "Windows Terminal Add-AppxPackage completed for current user."
+    }
+    catch {
+        Write-LogError "Add-AppxPackage for Windows Terminal failed: $($_.Exception.Message)"
+    }
+}
+
+function Set-DefaultTerminalToWindowsTerminal {
+    # Configure Windows Terminal as the default console host for the current user.
+    try {
+        $kitRoot   = 'C:\Windows\Setup\Scripts\WindowsTerminal'
+        $aumidPath = Join-Path -Path $kitRoot -ChildPath 'AUMIDs.txt'
+        $terminalAumid = $null
+
+        if (Test-Path -LiteralPath $aumidPath) {
+            $content = Get-Content -Path $aumidPath -ErrorAction Stop
+            $terminalAumid = ($content | Where-Object { $_ -and $_.Trim().Length -gt 0 } | Select-Object -First 1).Trim()
+        }
+
+        if (-not $terminalAumid) {
+            # Fallback to well-known AUMID if AUMIDs.txt is missing or empty.
+            $terminalAumid = 'Microsoft.WindowsTerminal_8wekyb3d8bbwe!App'
+        }
+
+        $consoleKey = 'HKCU:\Console\%%Startup'
+        if (-not (Test-Path -LiteralPath $consoleKey)) {
+            New-Item -Path $consoleKey -Force | Out-Null
+        }
+
+        Set-ItemProperty -Path $consoleKey -Name 'DelegationConsole'  -Value $terminalAumid -Force
+        Set-ItemProperty -Path $consoleKey -Name 'DelegationTerminal' -Value $terminalAumid -Force
+
+        Write-LogInfo "Default console host configured to Windows Terminal (AUMID='$terminalAumid')."
+    }
+    catch {
+        Write-LogError "Failed to configure Windows Terminal as default host: $($_.Exception.Message)"
+    }
+}
+
 function Configure-DefenderAndFirewall {
     # Disable Defender core protections and Windows Firewall profiles.
     Write-LogInfo "Configuring Microsoft Defender Antivirus preferences..."
@@ -532,13 +637,15 @@ try {
 
     Invoke-Step -Name 'Confirm administrator token'        -Action { Confirm-AdministratorToken }
     Invoke-Step -Name 'Install PowerShell 7.5.4'           -Action { Install-PowerShell7 }
-    Invoke-Step -Name 'Configure PowerShell defaults'      -Action { Configure-PowerShellDefaults }
-    Invoke-Step -Name 'Set execution policies'             -Action { Set-ExecutionPolicies }
-    Invoke-Step -Name 'Configure Defender and firewall'    -Action { Configure-DefenderAndFirewall }
-    Invoke-Step -Name 'Configure SmartScreen and UAC'      -Action { Configure-SmartScreenAndUac }
-    Invoke-Step -Name 'Copy payloads to Downloads'         -Action { Copy-PayloadsToDownloads }
-    Invoke-Step -Name 'Install core applications'          -Action { Install-Applications }
-    Invoke-Step -Name 'Invoke user customization script'   -Action { Invoke-UserCustomizationScript }
+    Invoke-Step -Name 'Configure PowerShell defaults'          -Action { Configure-PowerShellDefaults }
+    Invoke-Step -Name 'Set execution policies'                 -Action { Set-ExecutionPolicies }
+    Invoke-Step -Name 'Install Windows Terminal'               -Action { Install-WindowsTerminal }
+    Invoke-Step -Name 'Set Windows Terminal as default host'   -Action { Set-DefaultTerminalToWindowsTerminal }
+    Invoke-Step -Name 'Configure Defender and firewall'        -Action { Configure-DefenderAndFirewall }
+    Invoke-Step -Name 'Configure SmartScreen and UAC'          -Action { Configure-SmartScreenAndUac }
+    Invoke-Step -Name 'Copy payloads to Downloads'             -Action { Copy-PayloadsToDownloads }
+    Invoke-Step -Name 'Install core applications'              -Action { Install-Applications }
+    Invoke-Step -Name 'Invoke user customization script'       -Action { Invoke-UserCustomizationScript }
 }
 finally {
     try {

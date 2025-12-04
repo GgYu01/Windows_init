@@ -9,6 +9,7 @@
   - 将交互式 `Windows PowerShell` 默认跳转到 `PowerShell 7`；
   - 调整执行策略、关闭 Defender / 防火墙 / SmartScreen / UAC 等限制；
   - 将预置的软件安装包从镜像中复制到 `C:\Users\Administrator\Downloads`；
+  - 从本地预装包注册并安装 Windows Terminal，并将其配置为当前用户的默认控制台宿主；
   - 对部分软件执行静默安装（仅记录错误，不中断首启流程），包括：
     - `7z2501-x64.exe`
     - `581.57-desktop-win10-win11-64bit-international-dch-whql.exe`（NVIDIA 驱动，使用静默和清洁安装参数）
@@ -98,6 +99,13 @@ Windows 安装程序对 `sources\$OEM$` 目录有约定：
 │              ├─ root.ps1                 ← 来自仓库 root.ps1
 │              ├─ PowerShell-7.5.4-win-x64.msi
 │              ├─ UserCustomization.ps1    ← 可选：你的扩展脚本
+│              ├─ WindowsTerminal          ← Windows Terminal 预装包目录（需手动复制）
+│              │  ├─ 47c42ab59d47421a89290c85b705f6ff.msixbundle
+│              │  ├─ 47c42ab59d47421a89290c85b705f6ff_License1.xml
+│              │  ├─ AUMIDs.txt
+│              │  ├─ Microsoft.UI.Xaml.2.8_8.2501.31001.0_x64__8wekyb3d8bbwe.appx
+│              │  ├─ Microsoft.UI.Xaml.2.8_8.2501.31001.0_x86__8wekyb3d8bbwe.appx
+│              │  └─ （可选）其他架构的 XAML 依赖或 provxml 文件
 │              └─ Payloads
 │                 ├─ Defender_Control_2.1.0_Single
 │                 ├─ Sunshine
