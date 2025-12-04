@@ -323,6 +323,7 @@ function Copy-PayloadsToDownloads {
         'Kook_PC_Setup_v0.99.0.0.exe',
         'MSIAfterburner-64-4.6.5.exe',
         'QQ9.7.25.29411.exe',
+        'Set-GpuDeviceDesc.ps1',
         'ShareX-17.1.0-setup.exe',
         'SteamSetup.exe',
         'uuyc_4.8.0.exe',

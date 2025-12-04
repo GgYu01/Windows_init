@@ -61,6 +61,15 @@
       - `硬盘PE系统和教程 文件如果无法打开请下载 RAR 解压工具 注意别下广告收费的\第二 SATA 硬盘 这个整个文件夹拷贝到PE桌面\VIUpdateTools.exe`
       - `主板修改和板载网卡教学\机器猫硬解工具 (1).exe`
 
+- `Set-GpuDeviceDesc.ps1`  
+  - 仅用于安装完成后的系统中 **手动执行**，不会在安装或首启阶段自动调用。  
+  - 功能：根据显卡设备的 InstanceId，将注册表路径  
+    `HKLM\SYSTEM\CurrentControlSet\Enum\<InstanceId>\DeviceDesc`  
+    的值修改为指定的字符串（默认 `NVIDIA Geforce GTX 660`）。  
+  - 支持两种使用模式：
+    - 直接指定 `-InstanceId` 参数；
+    - 不指定参数时，使用 `Get-PnpDevice -Class Display` 枚举所有显示适配器，供你选择目标设备。
+
 ---
 
 ## 镜像目录布局设计（$OEM$ 机制）
