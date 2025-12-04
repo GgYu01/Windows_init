@@ -76,7 +76,8 @@ function Select-GpuInstanceIdInteractive {
         $index++
     }
 
-    $indexed | Format-Table -AutoSize
+    # Render table to host to avoid returning formatting objects to the caller.
+    $indexed | Format-Table -AutoSize | Out-Host
 
     $selection = Read-Host "Enter index of target display adapter"
 
