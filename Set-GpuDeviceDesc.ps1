@@ -79,15 +79,18 @@ function Select-GpuInstanceIdInteractive {
     $indexed | Format-Table -AutoSize
 
     $selection = Read-Host "Enter index of target display adapter"
-    if (-not [int]::TryParse($selection, [ref]$null)) {
-        Write-Err "Invalid index input. Aborting interactive selection."
+
+    # Parse user input into an integer index; treat invalid input as a non-fatal condition.
+    $parsedIndex = 0
+    if (-not [int]::TryParse($selection, [ref]$parsedIndex)) {
+        Write-Warn "Invalid index input. Aborting interactive selection."
         return $null
     }
 
-    $selectionIndex = [int]$selection
+    $selectionIndex = $parsedIndex
     $chosen = $indexed | Where-Object { $_.Index -eq $selectionIndex } | Select-Object -First 1
     if (-not $chosen) {
-        Write-Err "No adapter found for index $selectionIndex."
+        Write-Warn "No adapter found for index $selectionIndex."
         return $null
     }
 
@@ -159,4 +162,3 @@ try {
 catch {
     Write-Err "Unhandled error: $($_.Exception.Message)"
 }
-
