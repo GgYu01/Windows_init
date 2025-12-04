@@ -356,6 +356,127 @@ function Copy-PayloadsToDownloads {
     }
 }
 
+function Install-Applications {
+    # Perform best-effort silent installations for selected applications.
+    $payloadRoot = 'C:\Windows\Setup\Scripts\Payloads'
+
+    if (-not (Test-Path -LiteralPath $payloadRoot)) {
+        Write-LogWarn "Payload root '$payloadRoot' does not exist; skipping application installation."
+        return
+    }
+
+    # 7-Zip (7z2501-x64.exe) - standard silent install switch /S
+    $sevenZipExe = Join-Path -Path $payloadRoot -ChildPath '7z2501-x64.exe'
+    if (Test-Path -LiteralPath $sevenZipExe) {
+        try {
+            Write-LogInfo "Installing 7-Zip from '$sevenZipExe'..."
+            $p = Start-Process -FilePath $sevenZipExe -ArgumentList '/S' -Wait -PassThru
+            if ($p.ExitCode -eq 0) {
+                Write-LogInfo "7-Zip installation completed with exit code 0."
+            }
+            else {
+                Write-LogError "7-Zip installer exited with code $($p.ExitCode)."
+            }
+        }
+        catch {
+            Write-LogError "7-Zip installation failed: $($_.Exception.Message)"
+        }
+    }
+    else {
+        Write-LogWarn "7-Zip installer not found at '$sevenZipExe'; skipping."
+    }
+
+    # NVIDIA driver - silent, clean installation, driver only if supported by the package.
+    $nvidiaExe = Join-Path -Path $payloadRoot -ChildPath '581.57-desktop-win10-win11-64bit-international-dch-whql.exe'
+    if (Test-Path -LiteralPath $nvidiaExe) {
+        try {
+            Write-LogInfo "Installing NVIDIA driver from '$nvidiaExe' (silent, clean)..."
+
+            # Commonly used NVIDIA installer arguments; component-level control may vary across releases.
+            $nvidiaArgs = '-s -noreboot -clean'
+
+            $p = Start-Process -FilePath $nvidiaExe -ArgumentList $nvidiaArgs -Wait -PassThru
+            if ($p.ExitCode -eq 0) {
+                Write-LogInfo "NVIDIA driver installer exited with code 0."
+            }
+            else {
+                Write-LogError "NVIDIA driver installer exited with code $($p.ExitCode)."
+            }
+        }
+        catch {
+            Write-LogError "NVIDIA driver installation failed: $($_.Exception.Message)"
+        }
+    }
+    else {
+        Write-LogWarn "NVIDIA driver installer not found at '$nvidiaExe'; skipping."
+    }
+
+    # Steam - standard silent install switch /S
+    $steamExe = Join-Path -Path $payloadRoot -ChildPath 'SteamSetup.exe'
+    if (Test-Path -LiteralPath $steamExe) {
+        try {
+            Write-LogInfo "Installing Steam from '$steamExe'..."
+            $p = Start-Process -FilePath $steamExe -ArgumentList '/S' -Wait -PassThru
+            if ($p.ExitCode -eq 0) {
+                Write-LogInfo "Steam installation completed with exit code 0."
+            }
+            else {
+                Write-LogError "Steam installer exited with code $($p.ExitCode)."
+            }
+        }
+        catch {
+            Write-LogError "Steam installation failed: $($_.Exception.Message)"
+        }
+    }
+    else {
+        Write-LogWarn "Steam installer not found at '$steamExe'; skipping."
+    }
+
+    # Visual C++ Redistributable x64
+    $vcRedistX64 = Join-Path -Path $payloadRoot -ChildPath 'VC_redist.x64.exe'
+    if (Test-Path -LiteralPath $vcRedistX64) {
+        try {
+            Write-LogInfo "Installing Visual C++ Redistributable x64 from '$vcRedistX64'..."
+            $args = '/install /quiet /norestart'
+            $p = Start-Process -FilePath $vcRedistX64 -ArgumentList $args -Wait -PassThru
+            if ($p.ExitCode -eq 0) {
+                Write-LogInfo "Visual C++ Redistributable x64 installation completed with exit code 0."
+            }
+            else {
+                Write-LogError "Visual C++ Redistributable x64 installer exited with code $($p.ExitCode)."
+            }
+        }
+        catch {
+            Write-LogError "Visual C++ Redistributable x64 installation failed: $($_.Exception.Message)"
+        }
+    }
+    else {
+        Write-LogWarn "Visual C++ Redistributable x64 installer not found at '$vcRedistX64'; skipping."
+    }
+
+    # Visual C++ Redistributable x86
+    $vcRedistX86 = Join-Path -Path $payloadRoot -ChildPath 'VC_redist.x86.exe'
+    if (Test-Path -LiteralPath $vcRedistX86) {
+        try {
+            Write-LogInfo "Installing Visual C++ Redistributable x86 from '$vcRedistX86'..."
+            $args = '/install /quiet /norestart'
+            $p = Start-Process -FilePath $vcRedistX86 -ArgumentList $args -Wait -PassThru
+            if ($p.ExitCode -eq 0) {
+                Write-LogInfo "Visual C++ Redistributable x86 installation completed with exit code 0."
+            }
+            else {
+                Write-LogError "Visual C++ Redistributable x86 installer exited with code $($p.ExitCode)."
+            }
+        }
+        catch {
+            Write-LogError "Visual C++ Redistributable x86 installation failed: $($_.Exception.Message)"
+        }
+    }
+    else {
+        Write-LogWarn "Visual C++ Redistributable x86 installer not found at '$vcRedistX86'; skipping."
+    }
+}
+
 function Invoke-UserCustomizationScript {
     # Optionally execute an extra user script; all errors are captured in the log.
     $userScript = 'C:\Windows\Setup\Scripts\UserCustomization.ps1'
@@ -415,6 +536,7 @@ try {
     Invoke-Step -Name 'Configure Defender and firewall'    -Action { Configure-DefenderAndFirewall }
     Invoke-Step -Name 'Configure SmartScreen and UAC'      -Action { Configure-SmartScreenAndUac }
     Invoke-Step -Name 'Copy payloads to Downloads'         -Action { Copy-PayloadsToDownloads }
+    Invoke-Step -Name 'Install core applications'          -Action { Install-Applications }
     Invoke-Step -Name 'Invoke user customization script'   -Action { Invoke-UserCustomizationScript }
 }
 finally {

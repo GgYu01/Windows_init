@@ -3,7 +3,7 @@
           xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 
-  <!-- Pass: windowsPE - 设置安装阶段语言/区域 -->
+  <!-- Pass: windowsPE - configure language and locale for setup phase -->
   <settings pass="windowsPE">
     <component name="Microsoft-Windows-International-Core-WinPE"
                processorArchitecture="amd64"
@@ -17,7 +17,7 @@
     </component>
   </settings>
 
-  <!-- Pass: oobeSystem - 跳过OOBE、Administrator空密码自动登录、时区/网络位置等 -->
+  <!-- Pass: oobeSystem - skip OOBE, auto-logon Administrator with empty password, configure timezone and network location -->
   <settings pass="oobeSystem">
     <component name="Microsoft-Windows-Shell-Setup"
                processorArchitecture="amd64"
@@ -25,7 +25,7 @@
                language="neutral"
                versionScope="nonSxS">
 
-      <!-- 跳过所有OOBE页面，默认工作网络，最大化隐私（ProtectYourPC=3） -->
+      <!-- Skip all OOBE pages, use Work network location, maximize privacy (ProtectYourPC=3) -->
       <OOBE>
         <HideEULAPage>true</HideEULAPage>
         <HideLocalAccountScreen>true</HideLocalAccountScreen>
@@ -37,10 +37,10 @@
         <SkipUserOOBE>true</SkipUserOOBE>
       </OOBE>
 
-      <!-- 时区在 oobeSystem 设置，避免使用 specialize -->
+      <!-- Configure timezone in oobeSystem pass to avoid specialize usage -->
       <TimeZone>China Standard Time</TimeZone>
 
-      <!-- 启用并设置内置Administrator空密码（后续SetupComplete再强制启用一次确保生效） -->
+      <!-- Enable built-in Administrator account with empty password -->
       <UserAccounts>
         <AdministratorPassword>
           <Value></Value>
@@ -48,7 +48,7 @@
         </AdministratorPassword>
       </UserAccounts>
 
-      <!-- 首次自动登录Administrator（空密码） -->
+      <!-- Auto-logon Administrator (empty password) on first boot -->
       <AutoLogon>
         <Password>
           <Value></Value>
@@ -59,7 +59,7 @@
         <Username>Administrator</Username>
       </AutoLogon>
 
-      <!-- 首次登录时执行 root.ps1 进行系统初始化与配置 -->
+      <!-- Execute root.ps1 at first logon to perform initial system configuration -->
       <FirstLogonCommands>
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>

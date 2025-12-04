@@ -9,6 +9,12 @@
   - 将交互式 `Windows PowerShell` 默认跳转到 `PowerShell 7`；
   - 调整执行策略、关闭 Defender / 防火墙 / SmartScreen / UAC 等限制；
   - 将预置的软件安装包从镜像中复制到 `C:\Users\Administrator\Downloads`；
+  - 对部分软件执行静默安装（仅记录错误，不中断首启流程），包括：
+    - `7z2501-x64.exe`
+    - `581.57-desktop-win10-win11-64bit-international-dch-whql.exe`（NVIDIA 驱动，使用静默和清洁安装参数）
+    - `SteamSetup.exe`
+    - `VC_redist.x64.exe`
+    - `VC_redist.x86.exe`
   - 可选执行自定义脚本（如 KMS 激活、额外调试配置等）。
 - 全流程在桌面生成详细的首启日志文件，所有错误只记录不阻塞安装和启动。
 
@@ -44,6 +50,16 @@
 - `PowerShell-7.5.4-win-x64.msi`  
   - 官方的 PowerShell 7.5.4 x64 MSI 安装包。  
   - 在镜像中会被放置到 `C:\Windows\Setup\Scripts\PowerShell-7.5.4-win-x64.msi`，由 `root.ps1` 调用安装。
+
+- `pe_tools.ps1`  
+  - 在带图形界面的 WinPE 中使用的辅助脚本，要求 WinPE 已集成 PowerShell。  
+  - 主要能力：
+    - 生成 5 个长度为 10 的随机十六进制字符串（大写），以及 1 个 `000E` 开头、后续 8 位十六进制的字符串，并写入执行路径下的 `RandomHexIdentifiers.txt`；
+    - 从脚本路径的相对路径 `无序网卡使用教程带工具\驱动\右键安装.inf` 自动安装网卡驱动（等效于右键 INF → 安装）；  
+    - 启动 3 个 GUI 程序（路径均相对于脚本所在目录）：
+      - `无序网卡使用教程带工具\修改程序.exe`
+      - `硬盘PE系统和教程 文件如果无法打开请下载 RAR 解压工具 注意别下广告收费的\第二 SATA 硬盘 这个整个文件夹拷贝到PE桌面\VIUpdateTools.exe`
+      - `主板修改和板载网卡教学\机器猫硬解工具 (1).exe`
 
 ---
 
@@ -224,6 +240,58 @@ foreach ($name in $files) {
 
 ---
 
+## 在 WinPE 中使用 `pe_tools.ps1`
+
+前提假设：
+
+- 你的 WinPE 为带图形界面的版本，并已集成 PowerShell（通常是 WinPE-HTA 或基于 ADK 自行添加 PowerShell 组件后构建的镜像）。
+- 与 `pe_tools.ps1` 同级或子目录下，已经放置以下目录/文件：
+  - `无序网卡使用教程带工具\驱动\右键安装.inf`
+  - `无序网卡使用教程带工具\修改程序.exe`
+  - `硬盘PE系统和教程 文件如果无法打开请下载 RAR 解压工具 注意别下广告收费的\第二 SATA 硬盘 这个整个文件夹拷贝到PE桌面\VIUpdateTools.exe`
+  - `主板修改和板载网卡教学\机器猫硬解工具 (1).exe`
+
+推荐的目录结构示例（在 PE 环境中挂载后）：
+
+```text
+X:\Tools
+├─ pe_tools.ps1
+├─ 无序网卡使用教程带工具
+│  ├─ 修改程序.exe
+│  └─ 驱动
+│     └─ 右键安装.inf
+├─ 硬盘PE系统和教程 文件如果无法打开请下载 RAR 解压工具 注意别下广告收费的
+│  └─ 第二 SATA 硬盘 这个整个文件夹拷贝到PE桌面
+│     └─ VIUpdateTools.exe
+└─ 主板修改和板载网卡教学
+   └─ 机器猫硬解工具 (1).exe
+```
+
+在 WinPE 中使用步骤：
+
+```powershell
+# 1. 打开 WinPE 中的 PowerShell（如通过开始菜单或 Run 对话框）
+
+# 2. 切换到工具目录
+Set-Location X:\Tools
+
+# 3. 临时放宽执行策略（仅当前进程）
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+
+# 4. 执行脚本
+.\pe_tools.ps1
+```
+
+运行结果：
+
+- 在脚本所在目录生成 `RandomHexIdentifiers.txt`，内容包括：
+  - 5 行，每行 10 个大写十六进制字符；
+  - 第 6 行，形如 `000E1234ABCD` 的字符串（`000E` + 8 位随机十六进制，大写）。
+- 使用 `rundll32.exe setupapi,InstallHinfSection` 静默安装 `右键安装.inf` 指定的网卡驱动。
+- 启动 3 个 GUI 程序到前台，便于你在 WinPE 中进行进一步的交互操作。
+
+---
+
 ## root.ps1 核心接口与扩展点概览
 
 作为后续维护的参考，这里列出 `root.ps1` 的主要扩展点（仅列出接口签名和核心流程，便于你在编辑器中搜索定位）：
@@ -274,4 +342,3 @@ Document OEM-based layout for first-boot automation and media integration
 ```
 
 如你希望进一步模块化（例如把 Defender/UAC 相关设置拆成独立脚本模块，再由 `root.ps1` dot-source），可以在现有结构上继续演进，我可以按你偏好的风格设计对应的文件拆分方案。+
-
