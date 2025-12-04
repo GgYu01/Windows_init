@@ -14,7 +14,7 @@ param(
     [string]$NewDescription = 'NVIDIA Geforce GTX 660'
 )
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 
 function Write-Info {
     param([string]$Message)
@@ -142,22 +142,22 @@ function Set-DeviceDescriptionForInstanceId {
     }
 }
 
+Assert-Administrator
+
+$effectiveInstanceId = $InstanceId
+if ([string]::IsNullOrWhiteSpace($effectiveInstanceId)) {
+    Write-Info "No InstanceId parameter provided; entering interactive selection mode."
+    $effectiveInstanceId = Select-GpuInstanceIdInteractive
+}
+
+if ([string]::IsNullOrWhiteSpace($effectiveInstanceId)) {
+    Write-Warn "No valid InstanceId resolved; aborting without changes."
+    return
+}
+
+Write-Info "Target DeviceDesc will be set to '$NewDescription'."
 try {
-    Assert-Administrator
-
-    $effectiveInstanceId = $InstanceId
-    if (-not $effectiveInstanceId) {
-        Write-Info "No InstanceId parameter provided; entering interactive selection mode."
-        $effectiveInstanceId = Select-GpuInstanceIdInteractive
-    }
-
-    if (-not $effectiveInstanceId) {
-        Write-Err "No valid InstanceId resolved; aborting without changes."
-        return
-    }
-
-    Write-Info "Target DeviceDesc will be set to '$NewDescription'."
-    Set-DeviceDescriptionForInstanceId -TargetInstanceId $effectiveInstanceId -TargetDescription $NewDescription
+    Set-DeviceDescriptionForInstanceId -TargetInstanceId ([string]$effectiveInstanceId) -TargetDescription $NewDescription
 }
 catch {
     Write-Err "Unhandled error: $($_.Exception.Message)"
