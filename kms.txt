@@ -1,0 +1,133 @@
+
+slmgr.vbs -skms kms-default.cangshui.net ; slmgr.vbs -ato ; slmgr.vbs -dlv ; net user Administrator /active:yes 
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope LocalMachine -Force
+
+if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Warning "This script requires administrator privileges. Please run PowerShell as Administrator."
+    if ($host.Name -eq 'ConsoleHost') {
+        Read-Host "Press Enter to exit..."
+    }
+    Exit
+}
+
+Write-Host "Administrator privileges confirmed. Proceeding with security feature configuration." -ForegroundColor Green
+
+
+
+
+Write-Host "Attempting to disable Windows Defender Antivirus components..."
+try {
+    Set-MpPreference -DisableRealtimeMonitoring $true `
+                     -DisableBlockAtFirstSeen $true `
+                     -DisableIOAVProtection $true `
+                     -DisableScriptScanning $true `
+                     -MAPSReporting Disabled `
+                     -SubmitSamplesConsent NeverSend `
+                     -PUAProtection Disabled `
+                     -ErrorAction Stop
+
+    Write-Host "Successfully applied Windows Defender preference settings." -ForegroundColor Green
+}
+catch {
+    Write-Error "Failed to set Windows Defender preferences. Error: $_"
+    Write-Warning "Please ensure 'Tamper Protection' is manually disabled in Windows Security before running this script."
+}
+
+
+Get-MpPreference | Select-Object -Property `
+    RealTimeProtectionEnabled, `
+    BlockAtFirstSeen, `
+    IOAVProtectionEnabled, `
+    ScriptScanningEnabled, `
+    MAPSReporting, `
+    SubmitSamplesConsent, `
+    PUAProtection
+
+Get-MpComputerStatus | Select-Object -Property `
+    RealTimeProtectionEnabled, `
+    IsTamperProtected
+
+
+Write-Host "Attempting to disable all Windows Firewall profiles..."
+try {
+    Set-NetFirewallProfile -Profile Domain, Private, Public -Enabled False -ErrorAction Stop
+    Write-Host "Successfully disabled all firewall profiles." -ForegroundColor Green
+}
+catch {
+    Write-Error "Failed to disable firewall profiles. Error: $_"
+}
+
+Get-NetFirewallProfile | Select-Object -Property Name, Enabled
+
+
+
+
+Write-Host "Attempting to disable SmartScreen for apps, files, and Edge..."
+
+$explorerPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer"
+try {
+    Set-ItemProperty -Path $explorerPath -Name "SmartScreenEnabled" -Value "Off" -ErrorAction Stop
+    Write-Host " - Successfully disabled 'Check apps and files'."
+}
+catch {
+    Write-Error " - Failed to disable 'Check apps and files'. Error: $_"
+}
+
+$edgePolicyPath = "HKLM:\SOFTWARE\Policies\Microsoft\Edge"
+try {
+    if (-NOT (Test-Path $edgePolicyPath)) {
+        New-Item -Path $edgePolicyPath -Force | Out-Null
+    }
+    Set-ItemProperty -Path $edgePolicyPath -Name "SmartScreenEnabled" -Value 0 -Type DWord -ErrorAction Stop
+    Write-Host " - Successfully disabled SmartScreen for Microsoft Edge."
+}
+catch {
+    Write-Error " - Failed to disable SmartScreen for Edge. Error: $_"
+}
+
+$systemPolicyPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\System"
+try {
+    if (-NOT (Test-Path $systemPolicyPath)) {
+        New-Item -Path $systemPolicyPath -Force | Out-Null
+    }
+    Set-ItemProperty -Path $systemPolicyPath -Name "EnableSmartScreen" -Value 0 -Type DWord -ErrorAction Stop
+    Write-Host " - Successfully disabled SmartScreen for Microsoft Store apps."
+}
+catch {
+    Write-Error " - Failed to disable SmartScreen for Store apps. Error: $_"
+}
+
+Write-Host "SmartScreen configuration finished." -ForegroundColor Green
+
+
+Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" -Name "SmartScreenEnabled"
+
+Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Edge" -Name "SmartScreenEnabled"
+
+Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\System" -Name "EnableSmartScreen"
+
+
+
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ConsentPromptBehaviorUser" -Value 0 -Type DWord -Force
+
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ConsentPromptBehaviorAdmin" -Value 0 -Type DWord -Force
+
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableInstallerDetection" -Value 0 -Type DWord -Force
+
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableVirtualization" -Value 0 -Type DWord -Force
+
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableSecureUIAPaths" -Value 0 -Type DWord -Force
+
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "PromptOnSecureDesktop" -Value 0 -Type DWord -Force
+
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableLUA" -Value 0 -Type DWord -Force
+
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "FilterAdministratorToken" -Value 0 -Type DWord -Force
+
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableUIADesktopToggle" -Value 1 -Type DWord -Force
+
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ValidateAdminCodeSignatures" -Value 0 -Type DWord -Force
+
+
+
+

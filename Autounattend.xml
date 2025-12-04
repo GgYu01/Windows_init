@@ -59,6 +59,15 @@
         <Username>Administrator</Username>
       </AutoLogon>
 
+      <!-- 首次登录时执行 root.ps1 进行系统初始化与配置 -->
+      <FirstLogonCommands>
+        <SynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Description>Initial system configuration via root.ps1</Description>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoLogo -NonInteractive -File "C:\Windows\Setup\Scripts\root.ps1"</CommandLine>
+        </SynchronousCommand>
+      </FirstLogonCommands>
+
     </component>
   </settings>
 

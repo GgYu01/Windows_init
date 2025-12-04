@@ -1,0 +1,428 @@
+<# 
+  Root first-boot orchestration script.
+  - Runs once at first Administrator logon.
+  - Installs PowerShell 7.5.4 from local MSI.
+  - Configures Windows PowerShell to forward interactive sessions to pwsh.
+  - Applies system tweaks (Defender, firewall, SmartScreen, UAC, etc.).
+  - Copies predefined payloads to Administrator Downloads.
+  - Optionally executes an extra user customization script.
+  - Writes a detailed transcript log to the desktop and never aborts setup.
+#>
+
+$ErrorActionPreference = 'Stop'  # Fail fast inside each step; step wrapper catches.
+
+function Write-LogInfo {
+    param([string]$Message)
+    Write-Host "[INFO ] $Message"
+}
+
+function Write-LogWarn {
+    param([string]$Message)
+    Write-Warning "[WARN ] $Message"
+}
+
+function Write-LogError {
+    param([string]$Message)
+    Write-Error "[ERROR] $Message"
+}
+
+function Invoke-Step {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][scriptblock]$Action
+    )
+
+    Write-LogInfo "=== Step: $Name ==="
+    try {
+        & $Action
+        Write-LogInfo "=== Step '$Name' completed ==="
+    }
+    catch {
+        Write-LogError "Step '$Name' failed: $($_.Exception.Message)"
+        if ($_.ScriptStackTrace) {
+            Write-LogError $_.ScriptStackTrace
+        }
+    }
+}
+
+function Get-DesktopPath {
+    # Resolve current user's desktop directory.
+    try {
+        $desktop = [Environment]::GetFolderPath('Desktop')
+    }
+    catch {
+        $desktop = $null
+    }
+
+    if (-not $desktop) {
+        $desktop = Join-Path -Path $env:USERPROFILE -ChildPath 'Desktop'
+    }
+
+    if (-not (Test-Path -LiteralPath $desktop)) {
+        New-Item -Path $desktop -ItemType Directory -Force | Out-Null
+    }
+
+    return $desktop
+}
+
+function Get-DownloadsPath {
+    # Resolve current user's downloads directory.
+    $base = $null
+    try {
+        $base = [Environment]::GetFolderPath('UserProfile')
+    }
+    catch {
+        $base = $null
+    }
+
+    if (-not $base) {
+        $base = $env:USERPROFILE
+    }
+
+    $downloads = Join-Path -Path $base -ChildPath 'Downloads'
+
+    if (-not (Test-Path -LiteralPath $downloads)) {
+        New-Item -Path $downloads -ItemType Directory -Force | Out-Null
+    }
+
+    return $downloads
+}
+
+function Install-PowerShell7 {
+    # Install PowerShell 7.5.4 from local MSI if not already installed.
+    $existing = Get-Command -Name 'pwsh.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($existing) {
+        Write-LogInfo "PowerShell 7 already present at '$($existing.Source)'; skipping MSI installation."
+        return
+    }
+
+    $msiPath = 'C:\Windows\Setup\Scripts\PowerShell-7.5.4-win-x64.msi'
+    if (-not (Test-Path -LiteralPath $msiPath)) {
+        throw "MSI not found at '$msiPath'."
+    }
+
+    $arguments = "/i `"$msiPath`" /qn ADD_PATH=1 ENABLE_PSREMOTING=1 REGISTER_MANIFEST=1"
+    Write-LogInfo "Installing PowerShell 7 from '$msiPath'..."
+
+    $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $arguments -Wait -PassThru
+    if ($process.ExitCode -ne 0) {
+        throw "msiexec exited with code $($process.ExitCode)."
+    }
+
+    Write-LogInfo "PowerShell 7 MSI installation finished with exit code 0."
+}
+
+function Configure-PowerShellDefaults {
+    # Configure Windows PowerShell profile to forward interactive sessions to pwsh.
+    $profilePath = $profile.CurrentUserAllHosts
+    $profileDir = Split-Path -Path $profilePath -Parent
+
+    if (-not (Test-Path -LiteralPath $profileDir)) {
+        New-Item -Path $profileDir -ItemType Directory -Force | Out-Null
+    }
+
+    $pwshTarget = Join-Path -Path ${env:ProgramFiles} -ChildPath 'PowerShell\7\pwsh.exe'
+
+    $profileContent = @"
+# Auto-forward interactive Windows PowerShell console to PowerShell 7
+try {
+    if (`$Host.Name -eq 'ConsoleHost') {
+        `$pwsh = '$pwshTarget'
+        if (Test-Path -LiteralPath `$pwsh) {
+            Start-Process -FilePath `$pwsh -ArgumentList '-NoLogo' -WorkingDirectory `$PWD
+            exit
+        }
+    }
+}
+catch {
+    Write-Error "Profile forwarding to pwsh failed: `$($_.Exception.Message)"
+}
+"@
+
+    $profileContent | Set-Content -Path $profilePath -Encoding UTF8
+    Write-LogInfo "Configured Windows PowerShell profile to forward interactive sessions to PowerShell 7."
+}
+
+function Set-ExecutionPolicies {
+    # Relax execution policies for both CurrentUser and LocalMachine scopes.
+    try {
+        Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope CurrentUser -Force -ErrorAction Stop
+        Write-LogInfo "Set Windows PowerShell execution policy: CurrentUser = Bypass."
+    }
+    catch {
+        Write-LogError "Failed to set execution policy for CurrentUser: $($_.Exception.Message)"
+    }
+
+    try {
+        Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope LocalMachine -Force -ErrorAction Stop
+        Write-LogInfo "Set Windows PowerShell execution policy: LocalMachine = Bypass."
+    }
+    catch {
+        Write-LogError "Failed to set execution policy for LocalMachine: $($_.Exception.Message)"
+    }
+
+    # Try to configure PowerShell 7 execution policies if available.
+    $pwshCmd = Get-Command -Name 'pwsh.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($pwshCmd) {
+        try {
+            & $pwshCmd.Source -NoLogo -NonInteractive -Command `
+                "Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope CurrentUser -Force; Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope LocalMachine -Force"
+            Write-LogInfo "Set PowerShell 7 execution policies to Bypass for CurrentUser and LocalMachine."
+        }
+        catch {
+            Write-LogError "Failed to set PowerShell 7 execution policies: $($_.Exception.Message)"
+        }
+    }
+    else {
+        Write-LogWarn "PowerShell 7 not found while setting execution policies; skipping PowerShell 7 policy configuration."
+    }
+}
+
+function Configure-DefenderAndFirewall {
+    # Disable Defender core protections and Windows Firewall profiles.
+    Write-LogInfo "Configuring Microsoft Defender Antivirus preferences..."
+    try {
+        Set-MpPreference -DisableRealtimeMonitoring $true `
+                         -DisableBlockAtFirstSeen $true `
+                         -DisableIOAVProtection $true `
+                         -DisableScriptScanning $true `
+                         -MAPSReporting Disabled `
+                         -SubmitSamplesConsent NeverSend `
+                         -PUAProtection Disabled `
+                         -ErrorAction Stop
+
+        Write-LogInfo "Defender preferences updated."
+    }
+    catch {
+        Write-LogError "Failed to set Defender preferences: $($_.Exception.Message)"
+    }
+
+    try {
+        $mpPref = Get-MpPreference
+        $mpStatus = Get-MpComputerStatus
+
+        Write-LogInfo ("Defender preference snapshot: " +
+                       "RealTimeProtectionEnabled={0}, BlockAtFirstSeen={1}, IOAVProtectionEnabled={2}, ScriptScanningEnabled={3}, MAPSReporting={4}, SubmitSamplesConsent={5}, PUAProtection={6}" -f
+                       $mpPref.RealTimeProtectionEnabled,
+                       $mpPref.BlockAtFirstSeen,
+                       $mpPref.IOAVProtectionEnabled,
+                       $mpPref.ScriptScanningEnabled,
+                       $mpPref.MAPSReporting,
+                       $mpPref.SubmitSamplesConsent,
+                       $mpPref.PUAProtection)
+
+        Write-LogInfo ("Defender computer status snapshot: RealTimeProtectionEnabled={0}, IsTamperProtected={1}" -f
+                       $mpStatus.RealTimeProtectionEnabled,
+                       $mpStatus.IsTamperProtected)
+    }
+    catch {
+        Write-LogError "Failed to query Defender status: $($_.Exception.Message)"
+    }
+
+    Write-LogInfo "Disabling all Windows Firewall profiles..."
+    try {
+        Set-NetFirewallProfile -Profile Domain, Private, Public -Enabled False -ErrorAction Stop
+        Write-LogInfo "Firewall profiles disabled."
+    }
+    catch {
+        Write-LogError "Failed to disable firewall profiles: $($_.Exception.Message)"
+    }
+
+    try {
+        $profiles = Get-NetFirewallProfile | Select-Object -Property Name, Enabled
+        foreach ($p in $profiles) {
+            Write-LogInfo ("Firewall profile status: Name={0}, Enabled={1}" -f $p.Name, $p.Enabled)
+        }
+    }
+    catch {
+        Write-LogError "Failed to query firewall profile status: $($_.Exception.Message)"
+    }
+}
+
+function Configure-SmartScreenAndUac {
+    # Disable SmartScreen and UAC prompts via registry.
+    Write-LogInfo "Disabling SmartScreen for Explorer and Edge..."
+
+    $explorerPath    = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer"
+    $edgePolicyPath  = "HKLM:\SOFTWARE\Policies\Microsoft\Edge"
+    $systemPolicyPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\System"
+
+    try {
+        Set-ItemProperty -Path $explorerPath -Name "SmartScreenEnabled" -Value "Off" -ErrorAction Stop
+        Write-LogInfo "Set Explorer SmartScreenEnabled=Off."
+    }
+    catch {
+        Write-LogError "Failed to disable Explorer SmartScreen: $($_.Exception.Message)"
+    }
+
+    try {
+        if (-not (Test-Path -LiteralPath $edgePolicyPath)) {
+            New-Item -Path $edgePolicyPath -Force | Out-Null
+        }
+        Set-ItemProperty -Path $edgePolicyPath -Name "SmartScreenEnabled" -Value 0 -Type DWord -ErrorAction Stop
+        Write-LogInfo "Set Edge SmartScreenEnabled=0."
+    }
+    catch {
+        Write-LogError "Failed to disable Edge SmartScreen: $($_.Exception.Message)"
+    }
+
+    try {
+        if (-not (Test-Path -LiteralPath $systemPolicyPath)) {
+            New-Item -Path $systemPolicyPath -Force | Out-Null
+        }
+        Set-ItemProperty -Path $systemPolicyPath -Name "EnableSmartScreen" -Value 0 -Type DWord -ErrorAction Stop
+        Write-LogInfo "Set System EnableSmartScreen=0."
+    }
+    catch {
+        Write-LogError "Failed to disable system SmartScreen: $($_.Exception.Message)"
+    }
+
+    Write-LogInfo "Disabling UAC and elevation prompts..."
+
+    $uacKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
+
+    $uacValues = @{
+        ConsentPromptBehaviorUser   = 0
+        ConsentPromptBehaviorAdmin  = 0
+        EnableInstallerDetection    = 0
+        EnableVirtualization        = 0
+        EnableSecureUIAPaths        = 0
+        PromptOnSecureDesktop       = 0
+        EnableLUA                   = 0
+        FilterAdministratorToken    = 0
+        EnableUIADesktopToggle      = 1
+        ValidateAdminCodeSignatures = 0
+    }
+
+    foreach ($name in $uacValues.Keys) {
+        try {
+            Set-ItemProperty -Path $uacKey -Name $name -Value $uacValues[$name] -Type DWord -Force -ErrorAction Stop
+            Write-LogInfo ("Set UAC policy: {0}={1}" -f $name, $uacValues[$name])
+        }
+        catch {
+            Write-LogError ("Failed to set UAC policy '{0}': {1}" -f $name, $_.Exception.Message)
+        }
+    }
+}
+
+function Copy-PayloadsToDownloads {
+    # Copy predefined payloads from setup scripts directory into Downloads.
+    $payloadRoot   = 'C:\Windows\Setup\Scripts\Payloads'
+    $downloadsPath = Get-DownloadsPath
+
+    if (-not (Test-Path -LiteralPath $payloadRoot)) {
+        Write-LogWarn "Payload root '$payloadRoot' does not exist; skipping payload copy."
+        return
+    }
+
+    $items = @(
+        'Defender_Control_2.1.0_Single',
+        'Sunshine',
+        '7z2501-x64.exe',
+        '581.57-desktop-win10-win11-64bit-international-dch-whql.exe',
+        'Kook_PC_Setup_v0.99.0.0.exe',
+        'MSIAfterburner-64-4.6.5.exe',
+        'QQ9.7.25.29411.exe',
+        'ShareX-17.1.0-setup.exe',
+        'SteamSetup.exe',
+        'uuyc_4.8.0.exe',
+        'VC_redist.x64.exe',
+        'VC_redist.x86.exe'
+    )
+
+    foreach ($name in $items) {
+        $src = Join-Path -Path $payloadRoot -ChildPath $name
+        $dst = Join-Path -Path $downloadsPath -ChildPath $name
+
+        try {
+            if (-not (Test-Path -LiteralPath $src)) {
+                Write-LogWarn "Payload source not found: '$src'; skipping."
+                continue
+            }
+
+            $item = Get-Item -LiteralPath $src -ErrorAction Stop
+            if ($item.PSIsContainer) {
+                Copy-Item -Path $src -Destination $dst -Recurse -Force -ErrorAction Stop
+                Write-LogInfo "Copied directory payload '$name' to Downloads."
+            }
+            else {
+                Copy-Item -Path $src -Destination $dst -Force -ErrorAction Stop
+                Write-LogInfo "Copied file payload '$name' to Downloads."
+            }
+        }
+        catch {
+            Write-LogError "Failed to copy payload '$name' from '$src' to '$dst': $($_.Exception.Message)"
+        }
+    }
+}
+
+function Invoke-UserCustomizationScript {
+    # Optionally execute an extra user script; all errors are captured in the log.
+    $userScript = 'C:\Windows\Setup\Scripts\UserCustomization.ps1'
+
+    if (-not (Test-Path -LiteralPath $userScript)) {
+        Write-LogInfo "User customization script '$userScript' not found; skipping."
+        return
+    }
+
+    Write-LogInfo "Invoking user customization script '$userScript'..."
+    try {
+        & powershell.exe -ExecutionPolicy Bypass -NoLogo -NonInteractive -File $userScript
+        Write-LogInfo "User customization script finished."
+    }
+    catch {
+        Write-LogError "User customization script failed: $($_.Exception.Message)"
+    }
+}
+
+function Confirm-AdministratorToken {
+    # Log whether the current process has an elevated administrator token.
+    try {
+        $identity  = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+        $isAdmin   = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+        if ($isAdmin) {
+            Write-LogInfo "Administrator privileges confirmed."
+        }
+        else {
+            Write-LogWarn "Current process is NOT elevated; many configuration steps may fail."
+        }
+    }
+    catch {
+        Write-LogError "Failed to verify administrator token: $($_.Exception.Message)"
+    }
+}
+
+# Main orchestration
+
+$desktopPath = Get-DesktopPath
+$logPath     = Join-Path -Path $desktopPath -ChildPath ("FirstBoot-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+
+try {
+    try {
+        Start-Transcript -Path $logPath -Force | Out-Null
+        Write-LogInfo "Transcript started at '$logPath'."
+    }
+    catch {
+        Write-LogError "Failed to start transcript at '$logPath': $($_.Exception.Message)"
+    }
+
+    Invoke-Step -Name 'Confirm administrator token'        -Action { Confirm-AdministratorToken }
+    Invoke-Step -Name 'Install PowerShell 7.5.4'           -Action { Install-PowerShell7 }
+    Invoke-Step -Name 'Configure PowerShell defaults'      -Action { Configure-PowerShellDefaults }
+    Invoke-Step -Name 'Set execution policies'             -Action { Set-ExecutionPolicies }
+    Invoke-Step -Name 'Configure Defender and firewall'    -Action { Configure-DefenderAndFirewall }
+    Invoke-Step -Name 'Configure SmartScreen and UAC'      -Action { Configure-SmartScreenAndUac }
+    Invoke-Step -Name 'Copy payloads to Downloads'         -Action { Copy-PayloadsToDownloads }
+    Invoke-Step -Name 'Invoke user customization script'   -Action { Invoke-UserCustomizationScript }
+}
+finally {
+    try {
+        Stop-Transcript | Out-Null
+        Write-LogInfo "Transcript stopped."
+    }
+    catch {
+        # Ignore transcript shutdown errors.
+    }
+}
