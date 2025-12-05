@@ -410,6 +410,140 @@ function Configure-SmartScreenAndUac {
     }
 }
 
+function Configure-MemoryAndDma {
+    # Configure memory management and PCIe/DMA optimization.
+    # Addresses TLB shootdown, standby list bloat, and PCIe completion timeout issues.
+    # Errors are logged but do not abort the setup process.
+
+    Write-LogInfo "Configuring memory and DMA optimization..."
+
+    # 1. Disable Memory Compression via MMAgent
+    try {
+        Disable-MMAgent -MemoryCompression -ErrorAction Stop
+        Write-LogInfo "Memory compression disabled via MMAgent."
+    }
+    catch {
+        Write-LogWarn "Failed to disable memory compression via MMAgent: $($_.Exception.Message)"
+    }
+
+    # 2. Registry fallback for memory compression (DisablePageCombining)
+    $mmKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
+    try {
+        Set-ItemProperty -Path $mmKey -Name 'DisablePageCombining' -Value 1 -Type DWord -Force -ErrorAction Stop
+        Write-LogInfo "Set DisablePageCombining=1"
+    }
+    catch {
+        Write-LogWarn "Failed to set DisablePageCombining: $($_.Exception.Message)"
+    }
+
+    # 3. Disable SysMain (Superfetch) service
+    try {
+        $svc = Get-Service -Name 'SysMain' -ErrorAction SilentlyContinue
+        if ($svc) {
+            Stop-Service -Name 'SysMain' -Force -ErrorAction SilentlyContinue
+            Set-Service -Name 'SysMain' -StartupType Disabled -ErrorAction Stop
+            Write-LogInfo "SysMain service disabled."
+        }
+    }
+    catch {
+        Write-LogWarn "Failed to disable SysMain: $($_.Exception.Message)"
+    }
+
+    # 4. Disable ASPM (PCIe Active State Power Management)
+    $pciKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\PnP\Pci'
+    try {
+        if (-not (Test-Path -LiteralPath $pciKey)) {
+            New-Item -Path $pciKey -Force | Out-Null
+        }
+        Set-ItemProperty -Path $pciKey -Name 'ASPMOptOut' -Value 1 -Type DWord -Force -ErrorAction Stop
+        Write-LogInfo "Set ASPMOptOut=1 (ASPM disabled)"
+    }
+    catch {
+        Write-LogWarn "Failed to disable ASPM: $($_.Exception.Message)"
+    }
+
+    # 5. Extend PCIe Completion Timeout (0x6 = 65ms-210ms range)
+    try {
+        Set-ItemProperty -Path $pciKey -Name 'CompletionTimeout' -Value 0x6 -Type DWord -Force -ErrorAction Stop
+        Write-LogInfo "Set PCIe CompletionTimeout=0x6 (65ms-210ms range)"
+    }
+    catch {
+        Write-LogWarn "Failed to set PCIe CompletionTimeout: $($_.Exception.Message)"
+    }
+
+    # 6. Configure Ultimate Performance power plan
+    try {
+        $ultimateGuid = 'e9a42b02-d5df-448d-aa00-03f14749eb61'
+        $output = & powercfg -duplicatescheme $ultimateGuid 2>&1
+
+        if ($output -match '([a-f0-9-]{36})') {
+            $newGuid = $Matches[1]
+            & powercfg -setactive $newGuid
+            Write-LogInfo "Activated Ultimate Performance power plan: $newGuid"
+        }
+        else {
+            & powercfg -setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+            Write-LogInfo "Activated High Performance power plan (fallback)"
+        }
+
+        # Disable processor throttling
+        & powercfg -setacvalueindex SCHEME_CURRENT SUB_PROCESSOR PROCTHROTTLEMIN 100
+        & powercfg -setacvalueindex SCHEME_CURRENT SUB_PROCESSOR PROCTHROTTLEMAX 100
+
+        # Disable USB selective suspend
+        & powercfg -setacvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0
+
+        # Disable PCI Express link state power management
+        & powercfg -setacvalueindex SCHEME_CURRENT SUB_PCIEXPRESS ASPM 0
+
+        & powercfg -setactive SCHEME_CURRENT
+        Write-LogInfo "Power plan optimizations applied."
+    }
+    catch {
+        Write-LogWarn "Failed to configure power plan: $($_.Exception.Message)"
+    }
+
+    # 7. Disable network throttling
+    $mmSystemProfile = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
+    try {
+        Set-ItemProperty -Path $mmSystemProfile -Name 'NetworkThrottlingIndex' -Value 0xFFFFFFFF -Type DWord -Force -ErrorAction Stop
+        Set-ItemProperty -Path $mmSystemProfile -Name 'SystemResponsiveness' -Value 0 -Type DWord -Force -ErrorAction Stop
+        Write-LogInfo "Network throttling disabled."
+    }
+    catch {
+        Write-LogWarn "Failed to disable network throttling: $($_.Exception.Message)"
+    }
+
+    # 8. Configure TCP parameters
+    $tcpParams = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters'
+    try {
+        Set-ItemProperty -Path $tcpParams -Name 'TcpTimedWaitDelay' -Value 30 -Type DWord -Force -ErrorAction Stop
+        Set-ItemProperty -Path $tcpParams -Name 'MaxUserPort' -Value 65534 -Type DWord -Force -ErrorAction Stop
+        Write-LogInfo "TCP parameters configured."
+    }
+    catch {
+        Write-LogWarn "Failed to configure TCP parameters: $($_.Exception.Message)"
+    }
+
+    # 9. Disable Nagle algorithm on all network interfaces
+    $interfacesPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces'
+    try {
+        if (Test-Path -LiteralPath $interfacesPath) {
+            $interfaces = Get-ChildItem -Path $interfacesPath -ErrorAction SilentlyContinue
+            foreach ($iface in $interfaces) {
+                Set-ItemProperty -Path $iface.PSPath -Name 'TcpAckFrequency' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+                Set-ItemProperty -Path $iface.PSPath -Name 'TCPNoDelay' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+            }
+            Write-LogInfo "Nagle algorithm disabled on network interfaces."
+        }
+    }
+    catch {
+        Write-LogWarn "Failed to disable Nagle algorithm: $($_.Exception.Message)"
+    }
+
+    Write-LogInfo "Memory and DMA optimization configuration completed."
+}
+
 function Copy-PayloadsToDownloads {
     # Copy predefined payloads from setup scripts directory into Downloads.
     $payloadRoot   = 'C:\Windows\Setup\Scripts\Payloads'
@@ -643,6 +777,7 @@ try {
     Invoke-Step -Name 'Set Windows Terminal as default host'   -Action { Set-DefaultTerminalToWindowsTerminal }
     Invoke-Step -Name 'Configure Defender and firewall'        -Action { Configure-DefenderAndFirewall }
     Invoke-Step -Name 'Configure SmartScreen and UAC'          -Action { Configure-SmartScreenAndUac }
+    Invoke-Step -Name 'Configure memory and DMA optimization'  -Action { Configure-MemoryAndDma }
     Invoke-Step -Name 'Copy payloads to Downloads'             -Action { Copy-PayloadsToDownloads }
     Invoke-Step -Name 'Install core applications'              -Action { Install-Applications }
     Invoke-Step -Name 'Invoke user customization script'       -Action { Invoke-UserCustomizationScript }
