@@ -62,14 +62,94 @@
       - `硬盘PE系统和教程 文件如果无法打开请下载 RAR 解压工具 注意别下广告收费的\第二 SATA 硬盘 这个整个文件夹拷贝到PE桌面\VIUpdateTools.exe`
       - `主板修改和板载网卡教学\机器猫硬解工具 (1).exe`
 
-- `Set-GpuDeviceDesc.ps1`  
-  - 仅用于安装完成后的系统中 **手动执行**，不会在安装或首启阶段自动调用。  
-  - 功能：根据显卡设备的 InstanceId，将注册表路径  
-    `HKLM\SYSTEM\CurrentControlSet\Enum\<InstanceId>\DeviceDesc`  
-    的值修改为指定的字符串（默认 `NVIDIA Geforce GTX 660`）。  
+- `Set-GpuDeviceDesc.ps1`
+  - 仅用于安装完成后的系统中 **手动执行**，不会在安装或首启阶段自动调用。
+  - 功能：根据显卡设备的 InstanceId，将注册表路径
+    `HKLM\SYSTEM\CurrentControlSet\Enum\<InstanceId>\DeviceDesc`
+    的值修改为指定的字符串（默认 `NVIDIA Geforce GTX 660`）。
   - 支持两种使用模式：
     - 直接指定 `-InstanceId` 参数；
     - 不指定参数时，使用 `Get-PnpDevice -Class Display` 枚举所有显示适配器，供你选择目标设备。
+
+- `Set-MemoryDmaOptimization.ps1`
+  - 内存管理与 PCIe/DMA 优化脚本，解决游戏高频操作导致的卡顿和 DMA 设备连接问题。
+  - **在首启阶段由 `root.ps1` 自动执行核心优化**（一次性注册表配置）。
+  - 也可手动执行进行验证或额外配置。
+  - 核心优化项（对反作弊系统安全）：
+    - 禁用 Memory Compression（内存压缩）
+    - 禁用 SysMain/Superfetch 服务
+    - 禁用 PCIe ASPM（Active State Power Management）
+    - 扩展 PCIe Completion Timeout（65ms-210ms）
+    - 配置 Ultimate Performance 电源计划
+    - 禁用网络节流和 Nagle 算法
+  - 支持 `-WhatIf` 预览模式和 `-ShowCurrentConfig` 查看当前配置。
+
+- `StandbyListMaintenance/`
+  - Standby List 维护子系统，用于定期清理内存 Standby List。
+  - **警告**：计划任务功能使用 P/Invoke 调用 `ntdll.dll`，**可能触发反作弊系统检测**。
+  - 包含文件：
+    - `Clear-StandbyListGradual.ps1` - 渐进式清理脚本（阈值触发：>60% 物理内存）
+    - `Register-StandbyListTask.ps1` - 计划任务注册脚本（15分钟间隔）
+  - **推荐用法**：在启动游戏前手动运行 `Clear-StandbyListGradual.ps1 -Force`，而非注册计划任务。
+
+---
+
+## 内存管理与 DMA 优化模块
+
+### 问题背景
+
+游戏高频交易行操作（大量小内存对象分配/释放、频繁网络 I/O）可能导致：
+- 游戏卡顿
+- DMA 设备（如 PCIe FPGA 设备）连接超时或断开
+- 类似 RAMMap 执行 "Empty Working Sets" 后的症状
+
+### 技术原理
+
+```
+高频内存分配/释放 → Standby List 膨胀 → Working Set Trimming
+→ PTE 失效 → TLB Shootdown → DMA 设备访问的物理地址失效
+→ PCIe TLP Completion Timeout → 设备连接丢失
+```
+
+### 优化项说明
+
+| 优化项 | 注册表/配置 | 作用 |
+|--------|-------------|------|
+| 禁用 Memory Compression | `Disable-MMAgent` + `DisablePageCombining=1` | 避免压缩页导致物理地址无效 |
+| 禁用 SysMain | 服务 StartupType=Disabled | 减少 Working Set 竞争 |
+| 禁用 ASPM | `ASPMOptOut=1` | 消除 PCIe 链路状态切换延迟 |
+| 扩展 PCIe Timeout | `CompletionTimeout=0x6` | 65ms-210ms 超时范围 |
+| Ultimate Performance | `powercfg` 配置 | 禁用所有电源管理延迟 |
+| 禁用网络节流 | `NetworkThrottlingIndex=0xFFFFFFFF` | 减少交易延迟 |
+
+### 反作弊系统注意事项
+
+| 功能 | 风险等级 | 说明 |
+|------|----------|------|
+| 一次性注册表配置 | **安全** | 首启时执行，无持续进程 |
+| 服务配置 | **安全** | 标准系统 API |
+| 电源计划配置 | **安全** | 标准系统 API |
+| Standby List 计划任务 | **高风险** | P/Invoke 调用 ntdll.dll，可能被检测 |
+
+**建议**：
+- 首启优化（`root.ps1` 中的 `Configure-MemoryAndDma`）在反作弊系统加载前执行，安全。
+- **不要注册 Standby List 计划任务**，改为在启动游戏前手动运行清理脚本。
+
+### 使用方法
+
+```powershell
+# 查看当前配置
+.\Set-MemoryDmaOptimization.ps1 -ShowCurrentConfig
+
+# 预览所有优化（不实际执行）
+.\Set-MemoryDmaOptimization.ps1 -All -WhatIf
+
+# 执行所有安全优化（不包含计划任务）
+.\Set-MemoryDmaOptimization.ps1 -All
+
+# 游戏前手动清理 Standby List（推荐）
+.\StandbyListMaintenance\Clear-StandbyListGradual.ps1 -Force
+```
 
 ---
 
@@ -97,6 +177,10 @@ Windows 安装程序对 `sources\$OEM$` 目录有约定：
 │        └─ Setup
 │           └─ Scripts
 │              ├─ root.ps1                 ← 来自仓库 root.ps1
+│              ├─ Set-MemoryDmaOptimization.ps1  ← 内存/DMA优化脚本（可选手动执行）
+│              ├─ StandbyListMaintenance   ← Standby List 维护子系统
+│              │  ├─ Clear-StandbyListGradual.ps1
+│              │  └─ Register-StandbyListTask.ps1
 │              ├─ PowerShell-7.5.4-win-x64.msi
 │              ├─ UserCustomization.ps1    ← 可选：你的扩展脚本
 │              ├─ WindowsTerminal          ← Windows Terminal 预装包目录（需手动复制）
@@ -317,9 +401,13 @@ Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
 function Install-PowerShell7 { ... }
 function Configure-PowerShellDefaults { ... }
 function Set-ExecutionPolicies { ... }
+function Install-WindowsTerminal { ... }
+function Set-DefaultTerminalToWindowsTerminal { ... }
 function Configure-DefenderAndFirewall { ... }
 function Configure-SmartScreenAndUac { ... }
+function Configure-MemoryAndDma { ... }           # 内存/DMA优化
 function Copy-PayloadsToDownloads { ... }
+function Install-Applications { ... }
 function Invoke-UserCustomizationScript { ... }
 function Confirm-AdministratorToken { ... }
 ```
@@ -327,14 +415,18 @@ function Confirm-AdministratorToken { ... }
 主流程调用顺序：
 
 ```powershell
-Invoke-Step -Name 'Confirm administrator token'        -Action { Confirm-AdministratorToken }
-Invoke-Step -Name 'Install PowerShell 7.5.4'           -Action { Install-PowerShell7 }
-Invoke-Step -Name 'Configure PowerShell defaults'      -Action { Configure-PowerShellDefaults }
-Invoke-Step -Name 'Set execution policies'             -Action { Set-ExecutionPolicies }
-Invoke-Step -Name 'Configure Defender and firewall'    -Action { Configure-DefenderAndFirewall }
-Invoke-Step -Name 'Configure SmartScreen and UAC'      -Action { Configure-SmartScreenAndUac }
-Invoke-Step -Name 'Copy payloads to Downloads'         -Action { Copy-PayloadsToDownloads }
-Invoke-Step -Name 'Invoke user customization script'   -Action { Invoke-UserCustomizationScript }
+Invoke-Step -Name 'Confirm administrator token'           -Action { Confirm-AdministratorToken }
+Invoke-Step -Name 'Install PowerShell 7.5.4'              -Action { Install-PowerShell7 }
+Invoke-Step -Name 'Configure PowerShell defaults'         -Action { Configure-PowerShellDefaults }
+Invoke-Step -Name 'Set execution policies'                -Action { Set-ExecutionPolicies }
+Invoke-Step -Name 'Install Windows Terminal'              -Action { Install-WindowsTerminal }
+Invoke-Step -Name 'Set Windows Terminal as default host'  -Action { Set-DefaultTerminalToWindowsTerminal }
+Invoke-Step -Name 'Configure Defender and firewall'       -Action { Configure-DefenderAndFirewall }
+Invoke-Step -Name 'Configure SmartScreen and UAC'         -Action { Configure-SmartScreenAndUac }
+Invoke-Step -Name 'Configure memory and DMA optimization' -Action { Configure-MemoryAndDma }
+Invoke-Step -Name 'Copy payloads to Downloads'            -Action { Copy-PayloadsToDownloads }
+Invoke-Step -Name 'Install core applications'             -Action { Install-Applications }
+Invoke-Step -Name 'Invoke user customization script'      -Action { Invoke-UserCustomizationScript }
 ```
 
 如果你后续希望添加新的子步骤（例如 GPU 驱动静默安装、特定服务配置等），只需：

@@ -593,11 +593,15 @@ $anySelected = $DisableMemoryCompression -or $DisableSysMain -or $DisableASPM -o
                $ExtendPcieTimeout -or $OptimizePowerPlan -or $OptimizeNetwork -or `
                $DisableBackgroundServices -or $InstallStandbyListTask
 
+# NOTE: -InstallStandbyListTask is NOT included in -All to avoid anti-cheat detection.
+# The scheduled task runs P/Invoke calls to ntdll.dll which may trigger anti-cheat systems.
+# Users should manually run Clear-StandbyListGradual.ps1 before launching games if needed.
+
 if (-not $applyAll -and -not $anySelected) {
     Write-Host "Usage: .\Set-MemoryDmaOptimization.ps1 [options]" -ForegroundColor Yellow
     Write-Host ""
-    Write-Host "Options:" -ForegroundColor White
-    Write-Host "  -All                      Apply all optimizations"
+    Write-Host "Options (safe for anti-cheat, included in -All):" -ForegroundColor White
+    Write-Host "  -All                      Apply all safe optimizations (excludes scheduled task)"
     Write-Host "  -DisableMemoryCompression Disable Windows memory compression"
     Write-Host "  -DisableSysMain           Disable SysMain (Superfetch) service"
     Write-Host "  -DisableASPM              Disable PCIe Active State Power Management"
@@ -605,14 +609,20 @@ if (-not $applyAll -and -not $anySelected) {
     Write-Host "  -OptimizePowerPlan        Configure Ultimate Performance power plan"
     Write-Host "  -OptimizeNetwork          Optimize network stack (disable Nagle, throttling)"
     Write-Host "  -DisableBackgroundServices Disable DiagTrack, WSearch services"
-    Write-Host "  -InstallStandbyListTask   Install scheduled task for standby list maintenance"
     Write-Host "  -ShowCurrentConfig        Display current system configuration"
     Write-Host "  -WhatIf                   Preview changes without applying"
+    Write-Host ""
+    Write-Host "Options (may trigger anti-cheat, NOT included in -All):" -ForegroundColor Red
+    Write-Host "  -InstallStandbyListTask   Install scheduled task for standby list maintenance"
+    Write-Host "                            WARNING: Uses P/Invoke to ntdll.dll, may be detected!"
     Write-Host ""
     Write-Host "Examples:" -ForegroundColor White
     Write-Host "  .\Set-MemoryDmaOptimization.ps1 -All -WhatIf"
     Write-Host "  .\Set-MemoryDmaOptimization.ps1 -All"
     Write-Host "  .\Set-MemoryDmaOptimization.ps1 -DisableASPM -ExtendPcieTimeout"
+    Write-Host ""
+    Write-Host "For Standby List clearing, run manually before gaming:" -ForegroundColor Cyan
+    Write-Host "  .\StandbyListMaintenance\Clear-StandbyListGradual.ps1 -Force"
     Write-Host ""
     exit 0
 }
@@ -650,7 +660,12 @@ if ($applyAll -or $DisableBackgroundServices) {
     Disable-BackgroundServicesFunc
 }
 
-if ($applyAll -or $InstallStandbyListTask) {
+# NOTE: InstallStandbyListTask is NOT included in -All to avoid anti-cheat detection.
+# Only install if explicitly requested with -InstallStandbyListTask flag.
+if ($InstallStandbyListTask) {
+    Write-Warn "WARNING: Installing scheduled task may trigger anti-cheat detection!"
+    Write-Warn "The task uses P/Invoke calls to ntdll.dll (NtSetSystemInformation)."
+    Write-Warn "Consider running Clear-StandbyListGradual.ps1 manually before gaming instead."
     Install-StandbyListTaskFunc
 }
 
