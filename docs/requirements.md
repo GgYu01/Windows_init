@@ -7,8 +7,8 @@
 ## 原始需求与状态
 | ID | 描述 | 优先级 | 状态 | 备注 |
 | --- | --- | --- | --- | --- |
-| R1 | 修复 `root.ps1` 语法错误，确保在 PowerShell 5.1/7.x 均可解析 | 高 | 完成 | 包装主流程到 `Invoke-RootOrchestration`，新增保护性 catch/finally |
-| R2 | 保证首启日志（Transcript）可靠启动与关闭，不因失败导致异常 | 中 | 完成 | 增加启动标记 `transcriptStarted`，Stop 仅在成功启动后触发 |
+| R1 | 修复 `root.ps1` 语法错误，确保在 PowerShell 5.1/7.x 均可解析 | 高 | 完成 | 将 Transcript 生命周期抽象为 `Start-RootTranscript` / `Stop-RootTranscript`，移除易误判的嵌套 try，`Parser.ParseFile` 验证 0 语法错误 |
+| R2 | 保证首启日志（Transcript）可靠启动与关闭，不因失败导致异常 | 中 | 完成 | `Stop-RootTranscript` 仅在启动成功时调用，避免 Stop-Transcript 的伪异常 |
 | R3 | 建立中文文档体系：需求池、设计理念、决策日志、交接手册 | 中 | 完成 | 新增 `docs/` 目录四份 Markdown 文档 |
 | R4 | README 中暴露文档索引，便于快速定位 | 低 | 完成 | 新增文档索引段落 |
 

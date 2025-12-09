@@ -952,22 +952,47 @@ function Confirm-AdministratorToken {
     }
 }
 
+function Start-RootTranscript {
+    # Start transcript and return a flag indicating success for later cleanup.
+    param([string]$Path)
+
+    $started = $false
+    try {
+        Start-Transcript -Path $Path -Force | Out-Null
+        $started = $true
+        Write-LogInfo "Transcript started at '$Path'."
+    }
+    catch {
+        Write-LogError "Failed to start transcript at '$Path': $($_.Exception.Message)"
+    }
+
+    return $started
+}
+
+function Stop-RootTranscript {
+    # Stop transcript only when it was started; swallow shutdown errors.
+    param([bool]$Started)
+
+    if (-not $Started) {
+        return
+    }
+
+    try {
+        Stop-Transcript | Out-Null
+        Write-LogInfo "Transcript stopped."
+    }
+    catch {
+        # Ignore transcript shutdown errors.
+    }
+}
+
 function Invoke-RootOrchestration {
     # Main entry point coordinating first-boot tasks and logging.
     $desktopPath = Get-DesktopPath
     $logPath     = Join-Path -Path $desktopPath -ChildPath ("FirstBoot-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
-    $transcriptStarted = $false
+    $transcriptStarted = Start-RootTranscript -Path $logPath
 
     try {
-        try {
-            Start-Transcript -Path $logPath -Force | Out-Null
-            $transcriptStarted = $true
-            Write-LogInfo "Transcript started at '$logPath'."
-        }
-        catch {
-            Write-LogError "Failed to start transcript at '$logPath': $($_.Exception.Message)"
-        }
-
         $rootPhase = Get-RootPhase
         Write-LogInfo ("Detected RootPhase={0}." -f $rootPhase)
 
@@ -1019,15 +1044,7 @@ function Invoke-RootOrchestration {
         }
     }
     finally {
-        if ($transcriptStarted) {
-            try {
-                Stop-Transcript | Out-Null
-                Write-LogInfo "Transcript stopped."
-            }
-            catch {
-                # Ignore transcript shutdown errors.
-            }
-        }
+        Stop-RootTranscript -Started $transcriptStarted
     }
 }
 

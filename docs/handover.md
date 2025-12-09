@@ -11,6 +11,7 @@
 
 ## 修改指引
 - 仅在 `Invoke-RootOrchestration` 内追加新的 `Invoke-Step`，保持阶段顺序。
+- 日志行为调整需复用 `Start-RootTranscript` / `Stop-RootTranscript`，避免在主流程中直接调用 `Start-Transcript` 或 `Stop-Transcript`。
 - 新增外部依赖时，确保在缺失场景下只记录警告，不中断流程。
 - 任何代码改动需同步更新 `docs/requirements.md`（状态）、`docs/design.md`（流程/模块）、`docs/decision-log.md`（决策）。
 

@@ -2,6 +2,9 @@
 
 | 日期 (UTC+0) | 决策/灵感 | 背景 | 影响 |
 | --- | --- | --- | --- |
+| 2025-12-09 | 将 Transcript 生命周期抽象为 `Start-RootTranscript`/`Stop-RootTranscript`，清理主流程嵌套 try | 目标机仍出现“Try 缺少 Catch/Finally”报错，需要把日志开启/关闭与业务步骤解耦，减少解析歧义 | 语法验证 0 错误，Transcript 行为可重复复用，主流程结构更扁平 |
 | 2025-12-09 | 将主流程封装为 `Invoke-RootOrchestration`，增加全局 catch 和 Transcript 启停标志 | Windows 目标机出现 Try 缺少 Catch/Finally 的解析错误，需要显式界定主流程边界，避免拷贝时缺少块导致语法异常 | 脚本在 PowerShell 7.5.4 解析无误，后续扩展集中在单函数内，便于审计与回归 |
 | 2025-12-09 | 建立中文文档体系（需求池/设计/决策/交接） | 满足双语隔离要求，提升可维护性和交接效率 | 开发协作成本下降，后续需求与设计变更有可追溯记录 |
 | 2025-12-09 | Transcript 停止前引入 `transcriptStarted` 防御 | Start-Transcript 可能因策略失败；原逻辑强停会产生误判 | 日志关闭行为与真实启动状态一致，减少伪异常 |
+| 2025-12-09 | 将 Transcript 启动的 try/catch 拆出主 try，简化嵌套 | PowerShell 5.1 运行时报“Try 缺少 Catch/Finally”，怀疑嵌套 try 在某些环境被误判 | 解析路径更直观，减少旧版运行时的语法误报 |
+| 2025-12-09 | 将 Transcript 启动重新纳入主 try/finally，保持单一 try 栈 | 避免多层 try 在 PS5 解析器上的潜在歧义，同时继续用内层 try 捕获启动失败 | 结构更扁平，兼容性更高，功能不变 |
