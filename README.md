@@ -450,6 +450,15 @@ Invoke-Step -Name 'Invoke user customization script'      -Action { Invoke-UserC
 
 ---
 
+## 文档索引
+
+- `docs/requirements.md`：需求池与用户故事，含当前状态与风险假设。
+- `docs/design.md`：首启编排设计、数据流与兼容性说明。
+- `docs/decision-log.md`：关键决策与灵感记录，含日期与影响范围。
+- `docs/handover.md`：开发者交接手册，覆盖解析校验、修改指南与常见故障切入点。
+
+---
+
 ## 建议的提交信息（commit message）
 
 推荐使用如下英文提交信息，简洁但涵盖关键改动点：
@@ -463,4 +472,4 @@ Document OEM-based layout for first-boot automation and media integration
 - Provide detailed instructions for integrating this repo into extracted Windows media and using WinPE for setup
 ```
 
-如你希望进一步模块化（例如把 Defender/UAC 相关设置拆成独立脚本模块，再由 `root.ps1` dot-source），可以在现有结构上继续演进，我可以按你偏好的风格设计对应的文件拆分方案。+
+如你希望进一步模块化（例如把 Defender/UAC 相关设置拆成独立脚本模块，再由 `root.ps1` dot-source），可以在现有结构上继续演进，我可以按你偏好的风格设计对应的文件拆分方案。

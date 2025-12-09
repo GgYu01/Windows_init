@@ -952,70 +952,83 @@ function Confirm-AdministratorToken {
     }
 }
 
-# Main orchestration
+function Invoke-RootOrchestration {
+    # Main entry point coordinating first-boot tasks and logging.
+    $desktopPath = Get-DesktopPath
+    $logPath     = Join-Path -Path $desktopPath -ChildPath ("FirstBoot-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    $transcriptStarted = $false
 
-$desktopPath = Get-DesktopPath
-$logPath     = Join-Path -Path $desktopPath -ChildPath ("FirstBoot-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
-
-try {
     try {
-        Start-Transcript -Path $logPath -Force | Out-Null
-        Write-LogInfo "Transcript started at '$logPath'."
-    }
-    catch {
-        Write-LogError "Failed to start transcript at '$logPath': $($_.Exception.Message)"
-    }
-
-    $rootPhase = Get-RootPhase
-    Write-LogInfo ("Detected RootPhase={0}." -f $rootPhase)
-
-    # Phase 0: first login after installation.
-    # If Defender Remover 工具存在，则只进行 Defender 相关操作，注册二阶段 RunOnce，并交给工具重启系统。
-    if ($rootPhase -eq 0) {
-        Invoke-Step -Name 'Confirm administrator token'   -Action { Confirm-AdministratorToken }
-        Invoke-Step -Name 'Configure Defender and firewall'   -Action { Configure-DefenderAndFirewall }
-        Invoke-Step -Name 'Configure SmartScreen and UAC'     -Action { Configure-SmartScreenAndUac }
-
-        $toolRoot = 'C:\Windows\Setup\Scripts\DefenderRemover'
-        $batPath  = Join-Path -Path $toolRoot -ChildPath 'Script_Run.bat'
-        $exePath  = Join-Path -Path $toolRoot -ChildPath 'Defender.Remover.exe'
-        $hasRemover = (Test-Path -LiteralPath $batPath) -or (Test-Path -LiteralPath $exePath)
-
-        if ($hasRemover) {
-            Invoke-Step -Name 'Register second-phase RunOnce' -Action { Register-RootPhase2RunOnce; Set-RootPhase 1 }
-            Invoke-Step -Name 'Run Defender.Remover (optional)' -Action { Invoke-DefenderRemoverTool }
-
-            Write-LogInfo "Phase 1 (Defender removal) invoked. System may reboot automatically; remaining configuration will run on next logon."
-            return
+        try {
+            Start-Transcript -Path $logPath -Force | Out-Null
+            $transcriptStarted = $true
+            Write-LogInfo "Transcript started at '$logPath'."
+        }
+        catch {
+            Write-LogError "Failed to start transcript at '$logPath': $($_.Exception.Message)"
         }
 
-        Write-LogInfo "Defender Remover tool not found; proceeding with single-phase configuration in this session."
-    }
-    else {
-        Write-LogInfo "Non-zero RootPhase detected; skipping dedicated Defender removal phase."
-    }
+        $rootPhase = Get-RootPhase
+        Write-LogInfo ("Detected RootPhase={0}." -f $rootPhase)
 
-    # Phase 1/单阶段：执行其余所有系统配置与软件安装。
-    Invoke-Step -Name 'Install PowerShell 7.5.4'           -Action { Install-PowerShell7 }
-    Invoke-Step -Name 'Configure PowerShell defaults'      -Action { Configure-PowerShellDefaults }
-    Invoke-Step -Name 'Set execution policies'             -Action { Set-ExecutionPolicies }
-    Invoke-Step -Name 'Install Windows Terminal'           -Action { Install-WindowsTerminal }
-    Invoke-Step -Name 'Set Windows Terminal as default host' -Action { Set-DefaultTerminalToWindowsTerminal }
-    Invoke-Step -Name 'Configure memory and DMA optimization' -Action { Configure-MemoryAndDma }
-    Invoke-Step -Name 'Copy payloads to Downloads'         -Action { Copy-PayloadsToDownloads }
-    Invoke-Step -Name 'Install core applications'          -Action { Install-Applications }
-    Invoke-Step -Name 'Invoke user customization script'   -Action { Invoke-UserCustomizationScript }
+        # Phase 0: first login after installation.
+        # If Defender Remover 工具存在，则只进行 Defender 相关操作，注册二阶段 RunOnce，并交给工具重启系统。
+        if ($rootPhase -eq 0) {
+            Invoke-Step -Name 'Confirm administrator token'   -Action { Confirm-AdministratorToken }
+            Invoke-Step -Name 'Configure Defender and firewall'   -Action { Configure-DefenderAndFirewall }
+            Invoke-Step -Name 'Configure SmartScreen and UAC'     -Action { Configure-SmartScreenAndUac }
 
-    if ($rootPhase -eq 1) {
-        Set-RootPhase 2
-    }
-}
-finally {
-    try {
-        Stop-Transcript | Out-Null
-        Write-LogInfo "Transcript stopped."
+            $toolRoot = 'C:\Windows\Setup\Scripts\DefenderRemover'
+            $batPath  = Join-Path -Path $toolRoot -ChildPath 'Script_Run.bat'
+            $exePath  = Join-Path -Path $toolRoot -ChildPath 'Defender.Remover.exe'
+            $hasRemover = (Test-Path -LiteralPath $batPath) -or (Test-Path -LiteralPath $exePath)
+
+            if ($hasRemover) {
+                Invoke-Step -Name 'Register second-phase RunOnce' -Action { Register-RootPhase2RunOnce; Set-RootPhase 1 }
+                Invoke-Step -Name 'Run Defender.Remover (optional)' -Action { Invoke-DefenderRemoverTool }
+
+                Write-LogInfo "Phase 1 (Defender removal) invoked. System may reboot automatically; remaining configuration will run on next logon."
+                return
+            }
+
+            Write-LogInfo "Defender Remover tool not found; proceeding with single-phase configuration in this session."
+        }
+        else {
+            Write-LogInfo "Non-zero RootPhase detected; skipping dedicated Defender removal phase."
+        }
+
+        # Phase 1/单阶段：执行其余所有系统配置与软件安装。
+        Invoke-Step -Name 'Install PowerShell 7.5.4'           -Action { Install-PowerShell7 }
+        Invoke-Step -Name 'Configure PowerShell defaults'      -Action { Configure-PowerShellDefaults }
+        Invoke-Step -Name 'Set execution policies'             -Action { Set-ExecutionPolicies }
+        Invoke-Step -Name 'Install Windows Terminal'           -Action { Install-WindowsTerminal }
+        Invoke-Step -Name 'Set Windows Terminal as default host' -Action { Set-DefaultTerminalToWindowsTerminal }
+        Invoke-Step -Name 'Configure memory and DMA optimization' -Action { Configure-MemoryAndDma }
+        Invoke-Step -Name 'Copy payloads to Downloads'         -Action { Copy-PayloadsToDownloads }
+        Invoke-Step -Name 'Install core applications'          -Action { Install-Applications }
+        Invoke-Step -Name 'Invoke user customization script'   -Action { Invoke-UserCustomizationScript }
+
+        if ($rootPhase -eq 1) {
+            Set-RootPhase 2
+        }
     }
     catch {
-        # Ignore transcript shutdown errors.
+        Write-LogError "Unhandled error in root orchestration: $($_.Exception.Message)"
+        if ($_.ScriptStackTrace) {
+            Write-LogError $_.ScriptStackTrace
+        }
+    }
+    finally {
+        if ($transcriptStarted) {
+            try {
+                Stop-Transcript | Out-Null
+                Write-LogInfo "Transcript stopped."
+            }
+            catch {
+                # Ignore transcript shutdown errors.
+            }
+        }
     }
 }
+
+Invoke-RootOrchestration
