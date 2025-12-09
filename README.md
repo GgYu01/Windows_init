@@ -36,6 +36,10 @@
   - 首启总控脚本，在 **安装完成之后、首次自动登录 Administrator 时由 `Autounattend.xml` 调用**。  
   - 逻辑模块化：每个功能封装为函数，并通过统一的 `Invoke-Step` 包装执行。  
   - 关键行为：
+    - 在首启一开始尽可能关闭 / 禁用 Defender 与防火墙，并为 `C:\Windows\Setup\Scripts` 与当前用户 `Downloads` 添加宽泛的排除项，避免预置安装包被误删；
+    - 如果检测到 `C:\Windows\Setup\Scripts\DefenderRemover\Script_Run.bat`，会采用 **两阶段首启流程**：  
+      - 第 1 阶段（首次自动登录）：只执行 Defender / 防火墙 / SmartScreen / UAC 配置，向注册表 `HKLM\SOFTWARE\WindowsInit` 写入阶段标记 `RootPhase=1`，并在 `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce` 下注册 `WindowsInit-Phase2`，随后以参数 `y` 调用 `Script_Run.bat` 完成更激进的 Defender 移除并触发重启；  
+      - 第 2 阶段（重启后再次登录）：由 `RunOnce` 再次调用 `root.ps1`，跳过 Defender 移除阶段，仅执行后续的 PowerShell/Windows Terminal/内存与 DMA 优化、payload 复制与软件安装等配置；  
     - 安装 `PowerShell-7.5.4-win-x64.msi` 到系统（如果尚未安装）；
     - 为当前用户写入 Windows PowerShell profile，将交互式会话自动转发到 `pwsh.exe`；
     - 同时配置 Windows PowerShell 与 PowerShell 7 的执行策略为 `Bypass`；
@@ -138,6 +142,14 @@
 ### 使用方法
 
 ```powershell
+# （可选）在镜像中集成第三方 Defender Remover：
+# 将 windows-defender-remover 仓库发布包中的完整内容
+# 复制到 C:\Windows\Setup\Scripts\DefenderRemover（至少包含 Script_Run.bat、PowerRun.exe 以及 reg/powershell 脚本）
+# 首次登录时，root.ps1 的第 1 阶段会自动执行：
+#   Script_Run.bat y
+# 等价于在 Defender Remover 交互界面中选择：
+#   [Y] Remove Windows Defender Antivirus + Disable All Security Mitigations
+
 # 查看当前配置
 .\Set-MemoryDmaOptimization.ps1 -ShowCurrentConfig
 
@@ -190,6 +202,7 @@ Windows 安装程序对 `sources\$OEM$` 目录有约定：
 │              │  ├─ Microsoft.UI.Xaml.2.8_8.2501.31001.0_x64__8wekyb3d8bbwe.appx
 │              │  ├─ Microsoft.UI.Xaml.2.8_8.2501.31001.0_x86__8wekyb3d8bbwe.appx
 │              │  └─ （可选）其他架构的 XAML 依赖或 provxml 文件
+│              ├─ DefenderRemover          ← 可选：第三方 Defender Remover 工具目录（放 Script_Run.bat 与其依赖文件）
 │              └─ Payloads
 │                 ├─ Defender_Control_2.1.0_Single
 │                 ├─ Sunshine
@@ -200,7 +213,7 @@ Windows 安装程序对 `sources\$OEM$` 目录有约定：
 │                 ├─ QQ9.7.25.29411.exe
 │                 ├─ ShareX-17.1.0-setup.exe
 │                 ├─ SteamSetup.exe
-│                 ├─ uuyc_4.8.0.exe
+│                 ├─ uuyc_4.8.2.exe
 │                 ├─ VC_redist.x64.exe
 │                 └─ VC_redist.x86.exe
 └─ support
@@ -277,7 +290,7 @@ $files = @(
     "QQ9.7.25.29411.exe",
     "ShareX-17.1.0-setup.exe",
     "SteamSetup.exe",
-    "uuyc_4.8.0.exe",
+    "uuyc_4.8.2.exe",
     "VC_redist.x64.exe",
     "VC_redist.x86.exe"
 )

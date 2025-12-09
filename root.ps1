@@ -23,7 +23,66 @@ function Write-LogWarn {
 
 function Write-LogError {
     param([string]$Message)
-    Write-Error "[ERROR] $Message"
+    Write-Error "[ERROR] $Message" -ErrorAction Continue
+}
+
+function Get-RootPhase {
+    # Retrieve current root.ps1 execution phase from registry (0 = initial, 1 = post-Defender-removal, 2 = completed).
+    $key = 'HKLM:\SOFTWARE\WindowsInit'
+    try {
+        if (Test-Path -LiteralPath $key) {
+            $props = Get-ItemProperty -Path $key -Name 'RootPhase' -ErrorAction SilentlyContinue
+            if ($props -and $props.PSObject.Properties.Match('RootPhase').Count -gt 0) {
+                $value = 0
+                if ([int]::TryParse($props.RootPhase.ToString(), [ref]$value)) {
+                    return $value
+                }
+                return [int]$props.RootPhase
+            }
+        }
+    }
+    catch {
+        Write-LogError "Failed to read RootPhase from registry: $($_.Exception.Message)"
+    }
+    return 0
+}
+
+function Set-RootPhase {
+    param([int]$Phase)
+    $key = 'HKLM:\SOFTWARE\WindowsInit'
+    try {
+        if (-not (Test-Path -LiteralPath $key)) {
+            New-Item -Path $key -Force | Out-Null
+        }
+        Set-ItemProperty -Path $key -Name 'RootPhase' -Value $Phase -Type DWord -Force
+        Write-LogInfo ("RootPhase set to {0} in registry." -f $Phase)
+    }
+    catch {
+        Write-LogError "Failed to set RootPhase in registry: $($_.Exception.Message)"
+    }
+}
+
+function Register-RootPhase2RunOnce {
+    # Register a RunOnce entry to invoke this script again for second-phase configuration.
+    try {
+        $runOnceKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce'
+        if (-not (Test-Path -LiteralPath $runOnceKey)) {
+            New-Item -Path $runOnceKey -Force | Out-Null
+        }
+
+        $scriptPath = $PSCommandPath
+        if (-not $scriptPath) {
+            $scriptPath = Join-Path -Path $PSScriptRoot -ChildPath 'root.ps1'
+        }
+
+        $command = "powershell.exe -ExecutionPolicy Bypass -NoLogo -NonInteractive -File `"$scriptPath`""
+        Set-ItemProperty -Path $runOnceKey -Name 'WindowsInit-Phase2' -Value $command -Force
+
+        Write-LogInfo "Registered RunOnce entry 'WindowsInit-Phase2' for second-phase root.ps1 execution."
+    }
+    catch {
+        Write-LogError "Failed to register RunOnce for second-phase execution: $($_.Exception.Message)"
+    }
 }
 
 function Invoke-Step {
@@ -239,10 +298,24 @@ function Install-WindowsTerminal {
     # Ensure the current Administrator session has Windows Terminal installed.
     try {
         Write-LogInfo "Installing Windows Terminal for the current user via Add-AppxPackage..."
-        Add-AppxPackage -Path $bundle.FullName `
-                        -LicensePath $license.FullName `
-                        -DependencyPath $deps `
-                        -ErrorAction Stop | Out-Null
+        $addAppxCmd = Get-Command -Name 'Add-AppxPackage' -ErrorAction SilentlyContinue
+        $supportsLicensePath = $addAppxCmd -and $addAppxCmd.Parameters.ContainsKey('LicensePath')
+
+        if ($supportsLicensePath -and $license) {
+            Add-AppxPackage -Path $bundle.FullName `
+                            -LicensePath $license.FullName `
+                            -DependencyPath $deps `
+                            -ErrorAction Stop | Out-Null
+        }
+        else {
+            if (-not $supportsLicensePath) {
+                Write-LogWarn "Add-AppxPackage on this system does not support -LicensePath; installing without license file."
+            }
+
+            Add-AppxPackage -Path $bundle.FullName `
+                            -DependencyPath $deps `
+                            -ErrorAction Stop | Out-Null
+        }
 
         Write-LogInfo "Windows Terminal Add-AppxPackage completed for current user."
     }
@@ -302,6 +375,93 @@ function Configure-DefenderAndFirewall {
         Write-LogError "Failed to set Defender preferences: $($_.Exception.Message)"
     }
 
+    # Try to hard-disable Defender via policy keys (best effort; may be ignored on newer builds).
+    try {
+        $wdPolicyKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender'
+        if (-not (Test-Path -LiteralPath $wdPolicyKey)) {
+            New-Item -Path $wdPolicyKey -Force | Out-Null
+        }
+
+        Set-ItemProperty -Path $wdPolicyKey -Name 'DisableAntiSpyware' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $wdPolicyKey -Name 'DisableAntiVirus'   -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+
+        $rtpKey = Join-Path -Path $wdPolicyKey -ChildPath 'Real-Time Protection'
+        if (-not (Test-Path -LiteralPath $rtpKey)) {
+            New-Item -Path $rtpKey -Force | Out-Null
+        }
+
+        $rtpValues = @{
+            DisableRealtimeMonitoring = 1
+            DisableIOAVProtection     = 1
+            DisableScriptScanning     = 1
+            DisableBehaviorMonitoring = 1
+        }
+
+        foreach ($name in $rtpValues.Keys) {
+            Set-ItemProperty -Path $rtpKey -Name $name -Value $rtpValues[$name] -Type DWord -Force -ErrorAction SilentlyContinue
+        }
+
+        Write-LogInfo "Windows Defender policy keys written (DisableAntiSpyware/DisableAntiVirus/Real-Time Protection)."
+    }
+    catch {
+        Write-LogError "Failed to write Windows Defender policy keys: $($_.Exception.Message)"
+    }
+
+    # Add very broad exclusions so Defender does not touch our payloads or downloads.
+    try {
+        $downloads = Get-DownloadsPath
+        $exclusionPaths = @(
+            'C:\Windows\Setup\Scripts',
+            'C:\Windows\Setup\Scripts\Payloads',
+            $downloads
+        )
+
+        Write-LogInfo ("Adding Defender exclusion paths: {0}" -f ($exclusionPaths -join '; '))
+        Add-MpPreference -ExclusionPath $exclusionPaths -ErrorAction Stop
+
+        $exclusionExtensions = @('exe', 'dll', 'sys')
+        Write-LogInfo ("Adding Defender exclusion extensions: {0}" -f ($exclusionExtensions -join '; '))
+        Add-MpPreference -ExclusionExtension $exclusionExtensions -ErrorAction Stop
+
+        $exclusionProcesses = @('powershell.exe', 'pwsh.exe', 'msiexec.exe')
+        Write-LogInfo ("Adding Defender exclusion processes: {0}" -f ($exclusionProcesses -join '; '))
+        Add-MpPreference -ExclusionProcess $exclusionProcesses -ErrorAction Stop
+
+        Write-LogInfo "Defender exclusions configured."
+    }
+    catch {
+        Write-LogError "Failed to configure Defender exclusions: $($_.Exception.Message)"
+    }
+
+    # Best-effort attempt to stop and disable the Defender service. This may be blocked by the OS / tamper protection.
+    try {
+        $defSvc = Get-Service -Name 'WinDefend' -ErrorAction SilentlyContinue
+        if ($defSvc) {
+            Write-LogInfo ("WinDefend service status before change: Status={0}, StartType={1}" -f $defSvc.Status, $defSvc.StartType)
+
+            try {
+                if ($defSvc.Status -eq 'Running') {
+                    Write-LogInfo "Attempting to stop WinDefend service..."
+                    Stop-Service -Name 'WinDefend' -Force -ErrorAction SilentlyContinue
+                }
+            }
+            catch {
+                Write-LogWarn "Failed to stop WinDefend service: $($_.Exception.Message)"
+            }
+
+            try {
+                Write-LogInfo "Attempting to set WinDefend startup type to Disabled..."
+                Set-Service -Name 'WinDefend' -StartupType Disabled -ErrorAction SilentlyContinue
+            }
+            catch {
+                Write-LogWarn "Failed to change WinDefend startup type: $($_.Exception.Message)"
+            }
+        }
+    }
+    catch {
+        Write-LogWarn "Failed to query WinDefend service: $($_.Exception.Message)"
+    }
+
     try {
         $mpPref = Get-MpPreference
         $mpStatus = Get-MpComputerStatus
@@ -342,6 +502,43 @@ function Configure-DefenderAndFirewall {
     catch {
         Write-LogError "Failed to query firewall profile status: $($_.Exception.Message)"
     }
+}
+
+function Invoke-DefenderRemoverTool {
+    # Optionally run external Windows Defender removal tool if present.
+    # This integrates with https://github.com/ionuttbara/windows-defender-remover
+    # when its Script_Run.bat (and related files) are placed under
+    # C:\Windows\Setup\Scripts\DefenderRemover.
+
+    $toolRoot   = 'C:\Windows\Setup\Scripts\DefenderRemover'
+    $batPath    = Join-Path -Path $toolRoot -ChildPath 'Script_Run.bat'
+    $exePath    = Join-Path -Path $toolRoot -ChildPath 'Defender.Remover.exe'
+
+    if (Test-Path -LiteralPath $batPath) {
+        try {
+            Write-LogInfo "Running Defender Remover Script_Run.bat in silent mode with option 'Y' (full Defender removal)..."
+            $proc = Start-Process -FilePath $batPath -ArgumentList 'y' -WorkingDirectory $toolRoot -Wait -PassThru
+            Write-LogInfo ("Script_Run.bat exited with code {0}. System may have been scheduled for reboot." -f $proc.ExitCode)
+        }
+        catch {
+            Write-LogError "Script_Run.bat execution failed: $($_.Exception.Message)"
+        }
+        return
+    }
+
+    if (Test-Path -LiteralPath $exePath) {
+        try {
+            Write-LogInfo "Script_Run.bat not found; attempting Defender.Remover.exe automation with '/r'..."
+            $proc = Start-Process -FilePath $exePath -ArgumentList '/r' -WorkingDirectory $toolRoot -PassThru
+            Write-LogInfo ("Defender.Remover.exe started with PID {0}. It may still prompt for confirmation depending on version." -f $proc.Id)
+        }
+        catch {
+            Write-LogError "Defender.Remover.exe execution failed: $($_.Exception.Message)"
+        }
+        return
+    }
+
+    Write-LogInfo "No Defender Remover entry point (Script_Run.bat / Defender.Remover.exe) found under '$toolRoot'; skipping Defender removal."
 }
 
 function Configure-SmartScreenAndUac {
@@ -565,7 +762,7 @@ function Copy-PayloadsToDownloads {
         'Set-GpuDeviceDesc.ps1',
         'ShareX-17.1.0-setup.exe',
         'SteamSetup.exe',
-        'uuyc_4.8.0.exe',
+        'uuyc_4.8.2.exe',
         'VC_redist.x64.exe',
         'VC_redist.x86.exe'
     )
@@ -655,13 +852,13 @@ function Install-Applications {
     $steamExe = Join-Path -Path $payloadRoot -ChildPath 'SteamSetup.exe'
     if (Test-Path -LiteralPath $steamExe) {
         try {
-            Write-LogInfo "Installing Steam from '$steamExe'..."
-            $p = Start-Process -FilePath $steamExe -ArgumentList '/S' -Wait -PassThru
-            if ($p.ExitCode -eq 0) {
-                Write-LogInfo "Steam installation completed with exit code 0."
+            Write-LogInfo "Starting Steam silent installer in background from '$steamExe'..."
+            $p = Start-Process -FilePath $steamExe -ArgumentList '/S' -PassThru
+            if ($p -and $p.Id) {
+                Write-LogInfo ("Steam installer started with PID {0}; not waiting for completion." -f $p.Id)
             }
             else {
-                Write-LogError "Steam installer exited with code $($p.ExitCode)."
+                Write-LogWarn "Steam installer process handle not available; continuing without wait."
             }
         }
         catch {
@@ -769,18 +966,49 @@ try {
         Write-LogError "Failed to start transcript at '$logPath': $($_.Exception.Message)"
     }
 
-    Invoke-Step -Name 'Confirm administrator token'        -Action { Confirm-AdministratorToken }
+    $rootPhase = Get-RootPhase
+    Write-LogInfo ("Detected RootPhase={0}." -f $rootPhase)
+
+    # Phase 0: first login after installation.
+    # If Defender Remover 工具存在，则只进行 Defender 相关操作，注册二阶段 RunOnce，并交给工具重启系统。
+    if ($rootPhase -eq 0) {
+        Invoke-Step -Name 'Confirm administrator token'   -Action { Confirm-AdministratorToken }
+        Invoke-Step -Name 'Configure Defender and firewall'   -Action { Configure-DefenderAndFirewall }
+        Invoke-Step -Name 'Configure SmartScreen and UAC'     -Action { Configure-SmartScreenAndUac }
+
+        $toolRoot = 'C:\Windows\Setup\Scripts\DefenderRemover'
+        $batPath  = Join-Path -Path $toolRoot -ChildPath 'Script_Run.bat'
+        $exePath  = Join-Path -Path $toolRoot -ChildPath 'Defender.Remover.exe'
+        $hasRemover = (Test-Path -LiteralPath $batPath) -or (Test-Path -LiteralPath $exePath)
+
+        if ($hasRemover) {
+            Invoke-Step -Name 'Register second-phase RunOnce' -Action { Register-RootPhase2RunOnce; Set-RootPhase 1 }
+            Invoke-Step -Name 'Run Defender.Remover (optional)' -Action { Invoke-DefenderRemoverTool }
+
+            Write-LogInfo "Phase 1 (Defender removal) invoked. System may reboot automatically; remaining configuration will run on next logon."
+            return
+        }
+
+        Write-LogInfo "Defender Remover tool not found; proceeding with single-phase configuration in this session."
+    }
+    else {
+        Write-LogInfo "Non-zero RootPhase detected; skipping dedicated Defender removal phase."
+    }
+
+    # Phase 1/单阶段：执行其余所有系统配置与软件安装。
     Invoke-Step -Name 'Install PowerShell 7.5.4'           -Action { Install-PowerShell7 }
-    Invoke-Step -Name 'Configure PowerShell defaults'          -Action { Configure-PowerShellDefaults }
-    Invoke-Step -Name 'Set execution policies'                 -Action { Set-ExecutionPolicies }
-    Invoke-Step -Name 'Install Windows Terminal'               -Action { Install-WindowsTerminal }
-    Invoke-Step -Name 'Set Windows Terminal as default host'   -Action { Set-DefaultTerminalToWindowsTerminal }
-    Invoke-Step -Name 'Configure Defender and firewall'        -Action { Configure-DefenderAndFirewall }
-    Invoke-Step -Name 'Configure SmartScreen and UAC'          -Action { Configure-SmartScreenAndUac }
-    Invoke-Step -Name 'Configure memory and DMA optimization'  -Action { Configure-MemoryAndDma }
-    Invoke-Step -Name 'Copy payloads to Downloads'             -Action { Copy-PayloadsToDownloads }
-    Invoke-Step -Name 'Install core applications'              -Action { Install-Applications }
-    Invoke-Step -Name 'Invoke user customization script'       -Action { Invoke-UserCustomizationScript }
+    Invoke-Step -Name 'Configure PowerShell defaults'      -Action { Configure-PowerShellDefaults }
+    Invoke-Step -Name 'Set execution policies'             -Action { Set-ExecutionPolicies }
+    Invoke-Step -Name 'Install Windows Terminal'           -Action { Install-WindowsTerminal }
+    Invoke-Step -Name 'Set Windows Terminal as default host' -Action { Set-DefaultTerminalToWindowsTerminal }
+    Invoke-Step -Name 'Configure memory and DMA optimization' -Action { Configure-MemoryAndDma }
+    Invoke-Step -Name 'Copy payloads to Downloads'         -Action { Copy-PayloadsToDownloads }
+    Invoke-Step -Name 'Install core applications'          -Action { Install-Applications }
+    Invoke-Step -Name 'Invoke user customization script'   -Action { Invoke-UserCustomizationScript }
+
+    if ($rootPhase -eq 1) {
+        Set-RootPhase 2
+    }
 }
 finally {
     try {
