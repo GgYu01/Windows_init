@@ -33,16 +33,20 @@
     - 在首次登录时通过 `FirstLogonCommands` 调用 `root.ps1`。
 
 - `root.ps1`  
-  - 首启总控脚本，在 **安装完成之后、首次自动登录 Administrator 时由 `Autounattend.xml` 调用**。  
-  - 逻辑模块化：每个功能封装为函数，并通过统一的 `Invoke-Step` 包装执行。  
+  - PowerShell 版本兼容 loader：在 **安装完成之后、首次自动登录 Administrator 时由 `Autounattend.xml` 调用**，也是 RunOnce 的二阶段入口。  
+  - 当运行在 PowerShell 5.1 时，会优先定位/安装同目录的 `PowerShell-7.5.4-win-x64.msi`，再以 `pwsh.exe` 重启核心脚本；在 7.x 下直接调用核心脚本。  
+  - 不包含业务逻辑，仅负责环境检测、安装与转发。  
+
+- `root.core.ps1`  
+  - 首启总控脚本（运行于 PowerShell 7），逻辑模块化：每个功能封装为函数，并通过统一的 `Invoke-Step` 包装执行。  
   - 关键行为：
     - 在首启一开始尽可能关闭 / 禁用 Defender 与防火墙，并为 `C:\Windows\Setup\Scripts` 与当前用户 `Downloads` 添加宽泛的排除项，避免预置安装包被误删；
     - 如果检测到 `C:\Windows\Setup\Scripts\DefenderRemover\Script_Run.bat`，会采用 **两阶段首启流程**：  
-      - 第 1 阶段（首次自动登录）：只执行 Defender / 防火墙 / SmartScreen / UAC 配置，向注册表 `HKLM\SOFTWARE\WindowsInit` 写入阶段标记 `RootPhase=1`，并在 `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce` 下注册 `WindowsInit-Phase2`，随后以参数 `y` 调用 `Script_Run.bat` 完成更激进的 Defender 移除并触发重启；  
-      - 第 2 阶段（重启后再次登录）：由 `RunOnce` 再次调用 `root.ps1`，跳过 Defender 移除阶段，仅执行后续的 PowerShell/Windows Terminal/内存与 DMA 优化、payload 复制与软件安装等配置；  
+      - 第 1 阶段（首次自动登录）：只执行 Defender / 防火墙 / SmartScreen / UAC 配置，向注册表 `HKLM\SOFTWARE\WindowsInit` 写入阶段标记 `RootPhase=1`，并在 `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce` 下注册 `WindowsInit-Phase2`（指向 loader），随后以参数 `y` 调用 `Script_Run.bat` 完成更激进的 Defender 移除并触发重启；  
+      - 第 2 阶段（重启后再次登录）：由 `RunOnce` 再次调用 `root.ps1` loader，自动切换到 PowerShell 7，跳过 Defender 移除阶段，仅执行后续的 PowerShell/Windows Terminal/内存与 DMA 优化、payload 复制与软件安装等配置；  
     - 安装 `PowerShell-7.5.4-win-x64.msi` 到系统（如果尚未安装）；
     - 为当前用户写入 Windows PowerShell profile，将交互式会话自动转发到 `pwsh.exe`；
-    - 同时配置 Windows PowerShell 与 PowerShell 7 的执行策略为 `Bypass`；
+    - 同时配置 Windows PowerShell 与 PowerShell 7 的执行策略为 `Bypass`（7.x 环境下仍通过 `powershell.exe` 设置 5.1 策略）；
     - 调用 Defender / Firewall / SmartScreen / UAC 的配置逻辑；
     - 从预置目录复制 payload 到 `Downloads`；
     - 可选运行 `UserCustomization.ps1` 自定义脚本；
@@ -189,6 +193,7 @@ Windows 安装程序对 `sources\$OEM$` 目录有约定：
 │        └─ Setup
 │           └─ Scripts
 │              ├─ root.ps1                 ← 来自仓库 root.ps1
+│              ├─ root.core.ps1            ← 业务编排主脚本（PowerShell 7）
 │              ├─ Set-MemoryDmaOptimization.ps1  ← 内存/DMA优化脚本（可选手动执行）
 │              ├─ StandbyListMaintenance   ← Standby List 维护子系统
 │              │  ├─ Clear-StandbyListGradual.ps1
@@ -406,9 +411,9 @@ Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
 
 ---
 
-## root.ps1 核心接口与扩展点概览
+## root.core.ps1 核心接口与扩展点概览
 
-作为后续维护的参考，这里列出 `root.ps1` 的主要扩展点（仅列出接口签名和核心流程，便于你在编辑器中搜索定位）：
+作为后续维护的参考，这里列出 `root.core.ps1` 的主要扩展点（业务编排），`root.ps1` 仅作为版本兼容 loader：
 
 ```powershell
 function Install-PowerShell7 { ... }
