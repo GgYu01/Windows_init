@@ -12,6 +12,9 @@
 | R3 | 建立中文文档体系：需求池、设计理念、决策日志、交接手册 | 中 | 完成 | 新增 `docs/` 目录四份 Markdown 文档 |
 | R4 | README 中暴露文档索引，便于快速定位 | 低 | 完成 | 新增文档索引段落 |
 | R5 | 在 PowerShell 5.1 环境下自动切换到 PowerShell 7 执行核心逻辑 | 高 | 完成 | 引入 `root.ps1` 轻量 loader：如缺失 `pwsh.exe` 自动用本地 MSI 安装，再调用 `root.core.ps1`；`RunOnce` 也指向 loader |
+| R6 | Windows Terminal 必须全离线安装：缺少 AppX 栈或 XAML/VCLibs 依赖时应跳过，避免联网与长时间挂起 | 高 | 完成 | `Install-WindowsTerminal` 新增 AppX 部署栈探测与依赖完整性检查，缺失即跳过 |
+| R7 | Defender 模块被第三方移除时仍应静默降级，避免 Set-MpPreference/ Add-MpPreference 报错刷屏 | 中 | 完成 | 缺失 Defender cmdlet 时仅写策略注册表，跳过 mp cmdlet 调用和状态查询 |
+| R8 | MSIX 版 PowerShell 7 不可写 LocalMachine 执行策略，需绕过并给出明确告警 | 低 | 完成 | `Set-ExecutionPolicies` 检测 `PSHOME` 位于 WindowsApps 时跳过 LocalMachine 作用域 |
 
 ## 用户故事
 - 作为镜像自动化维护者，我需要 `root.ps1` 在首次登录时可以无语法错误地执行，以便所有配置步骤可顺利跑完。

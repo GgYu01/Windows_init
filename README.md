@@ -206,7 +206,10 @@ Windows 安装程序对 `sources\$OEM$` 目录有约定：
 │              │  ├─ AUMIDs.txt
 │              │  ├─ Microsoft.UI.Xaml.2.8_8.2501.31001.0_x64__8wekyb3d8bbwe.appx
 │              │  ├─ Microsoft.UI.Xaml.2.8_8.2501.31001.0_x86__8wekyb3d8bbwe.appx
+│              │  ├─ Microsoft.VCLibs.*Desktop*_x64.appx
+│              │  ├─ Microsoft.VCLibs.*Desktop*_x86.appx
 │              │  └─ （可选）其他架构的 XAML 依赖或 provxml 文件
+│              │  （缺少上述离线依赖或系统缺 AppX 部署堆栈时，脚本会直接跳过 Windows Terminal 安装与预配，避免触发联网拉取或长时间挂起。）
 │              ├─ DefenderRemover          ← 可选：第三方 Defender Remover 工具目录（放 Script_Run.bat 与其依赖文件）
 │              └─ Payloads
 │                 ├─ Defender_Control_2.1.0_Single

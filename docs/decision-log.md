@@ -2,6 +2,9 @@
 
 | 日期 (UTC+0) | 决策/灵感 | 背景 | 影响 |
 | --- | --- | --- | --- |
+| 2025-12-10 | Windows Terminal 安装前强制校验 AppX 部署栈与 UI.Xaml/VCLibs 离线依赖，缺失即跳过 | 目标机可能裁剪了 AppX 组件，或缺少 VCLibs 导致 Add-AppxPackage 尝试联网并挂起 | 避免联网安装与长时间等待，确保首启流程可控且纯离线 |
+| 2025-12-10 | Defender 模块缺失时降级为仅写策略注册表，跳过 Mp cmdlet | 第三方 Defender Remover 会移除 Defender 模块，原逻辑大量报错 | 日志更干净，仍维持策略级禁用与防火墙关闭 |
+| 2025-12-10 | MSIX 版 PowerShell 7 跳过 LocalMachine 执行策略写入 | WindowsApps 下的 pwsh 包路径只读，Set-ExecutionPolicy LocalMachine 会报拒绝访问 | 消除无意义错误输出，仍保持 CurrentUser 作用域 Bypass |
 | 2025-12-10 | 引入 `root.ps1` loader + `root.core.ps1` 核心拆分，RunOnce 指向 loader | PowerShell 5.1 解析失败且两阶段重启后仍需自动继续；需在 5.1 场景自动安装/切换到 7.x | 兼容 5.1 入口、保持二阶段自动续跑；核心逻辑固定运行在 7.x，行为稳定 |
 | 2025-12-10 | 在 7.x 环境下显式写入 Windows PowerShell profile 与执行策略 | 主脚本改为 7.x 运行，原有 profile/执行策略修改针对 5.1，需保持旧版控制台重定向与策略放宽 | `powershell.exe` 仍被设置为 Bypass，Windows PowerShell profile 照常转发到 `pwsh.exe` |
 | 2025-12-09 | 将 Transcript 生命周期抽象为 `Start-RootTranscript`/`Stop-RootTranscript`，清理主流程嵌套 try | 目标机仍出现“Try 缺少 Catch/Finally”报错，需要把日志开启/关闭与业务步骤解耦，减少解析歧义 | 语法验证 0 错误，Transcript 行为可重复复用，主流程结构更扁平 |

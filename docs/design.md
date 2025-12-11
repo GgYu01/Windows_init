@@ -28,6 +28,9 @@ Autounattend -> root.ps1 (loader)
 - **结构清晰**：Transcript 处理抽象为函数，主 try/finally 仅负责业务步骤，降低 PowerShell 5.1 对嵌套 try 的误判概率。
 - **可扩展性**：主流程集中在单一函数，后续可按顺序插入新 `Invoke-Step` 而不破坏结构。
 - **配置等效性**：在 PowerShell 7 中仍显式写入 Windows PowerShell profile 与执行策略（通过 `powershell.exe` 调用），保持旧版交互控制台的行为一致。
+- **离线优先**：Windows Terminal 安装前检测 AppX 部署栈可用性以及本地离线依赖（UI.Xaml 2.8 + VCLibs Desktop x86/x64）；缺失即跳过以避免联网拉取或长时间挂起。
+- **降级防御**：Defender 模块被第三方移除时，仅写策略注册表并跳过 `Set/Add/Get-Mp*` 调用，避免日志刷屏但保持防火墙等配置。
+- **MSIX 兼容**：当当前 PowerShell 7 来自 WindowsApps（MSIX），跳过 LocalMachine 执行策略写入，避免对只读包路径的访问拒绝。
 
 ## 模块与数据流
 - **输入**：本地预置 MSI/EXE、注册表键值、RunOnce 项。

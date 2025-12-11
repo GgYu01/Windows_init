@@ -9,6 +9,7 @@
 2. Loader 自检（在隔离 VM 上进行）：确认 `PowerShell-7.5.4-win-x64.msi` 与 `root.core.ps1` 同目录；用 `powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\\root.ps1` 观察是否自动安装/定位 `pwsh.exe`，退出码为 0。
 3. 逻辑入口：核心脚本末尾已调用 `Invoke-RootOrchestration`，无需额外入口。
 4. 关注日志：首启生成 `FirstBoot-*.log`，包含每步的 Info/Warn/Error。
+5. Windows Terminal 离线包自检：`WindowsTerminal/` 需包含 msixbundle、License、`Microsoft.UI.Xaml.2.8_*` x86/x64、`Microsoft.VCLibs.*Desktop*` x86/x64；缺失任一或 AppX 栈被裁剪时脚本会跳过安装与预配。
 
 ## 修改指引
 - 仅在 `Invoke-RootOrchestration` 内追加新的 `Invoke-Step`，保持阶段顺序。
@@ -29,3 +30,5 @@
 - Transcript 无法启动：检查执行策略或磁盘权限，必要时手动创建桌面日志目录。
 - RunOnce 未注册：确认当前用户为 Administrator 且注册表写入未被策略阻断。
 - 安装器静默参数失效：查看各安装器对应的日志/退出码，并在 `Install-Applications` 中追加专用处理。
+- Windows Terminal 未安装：常见原因是缺失 VCLibs/UI.Xaml 依赖或目标系统裁剪了 AppX 部署栈，脚本会跳过以避免联网安装；补齐离线包或在支持 AppX 的版本上安装。
+- Defender 步骤报错消失：当第三方 Defender Remover 删除了 Mp 模块时，脚本会仅写策略注册表并跳过 Mp cmdlet，属预期降级行为。

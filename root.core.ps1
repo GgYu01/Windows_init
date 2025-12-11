@@ -203,6 +203,7 @@ catch {
 function Set-ExecutionPolicies {
     # Relax execution policies for both Windows PowerShell and PowerShell 7.
     $isPowerShell7 = $PSVersionTable.PSEdition -eq 'Core' -and $PSVersionTable.PSVersion.Major -ge 7
+    $isMsixPackagedPwsh = $PSHOME -like '*WindowsApps*' -or $PSHOME -like '*Microsoft.PowerShell_*'
 
     # 1) Windows PowerShell (5.x) via powershell.exe to ensure down-level consoles are unblocked.
     $winPs = Get-Command -Name 'powershell.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -229,12 +230,18 @@ function Set-ExecutionPolicies {
         Write-LogError "Failed to set current-engine execution policy for CurrentUser: $($_.Exception.Message)"
     }
 
-    try {
-        Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope LocalMachine -Force -ErrorAction Stop
-        Write-LogInfo "Set current-engine execution policy: LocalMachine = Bypass."
+    if ($isMsixPackagedPwsh) {
+        # MSIX packaged pwsh cannot write LocalMachine config inside WindowsApps; avoid noisy failures.
+        Write-LogWarn "Current engine is MSIX packaged under WindowsApps; skipping LocalMachine execution policy to avoid access denials."
     }
-    catch {
-        Write-LogError "Failed to set current-engine execution policy for LocalMachine: $($_.Exception.Message)"
+    else {
+        try {
+            Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope LocalMachine -Force -ErrorAction Stop
+            Write-LogInfo "Set current-engine execution policy: LocalMachine = Bypass."
+        }
+        catch {
+            Write-LogError "Failed to set current-engine execution policy for LocalMachine: $($_.Exception.Message)"
+        }
     }
 
     # 3) If running from Windows PowerShell, also configure PowerShell 7 explicitly when present.
@@ -279,8 +286,9 @@ function Install-WindowsTerminal {
         $license = $null
     }
 
-    $deps = Get-ChildItem -Path $kitRoot -Filter 'Microsoft.UI.Xaml.2.8_*_*.appx' -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty FullName
+    $xamlDeps = Get-ChildItem -Path $kitRoot -Filter 'Microsoft.UI.Xaml.2.8_*_*.appx' -ErrorAction SilentlyContinue
+    $vcDeps   = Get-ChildItem -Path $kitRoot -Filter 'Microsoft.VCLibs.*Desktop*_*.appx' -ErrorAction SilentlyContinue
+    $deps     = @($xamlDeps + $vcDeps | Select-Object -ExpandProperty FullName)
 
     if (-not $bundle) {
         Write-LogWarn "Windows Terminal bundle (*.msixbundle) not found under '$kitRoot'; skipping."
@@ -295,29 +303,37 @@ function Install-WindowsTerminal {
     Write-LogInfo ("Windows Terminal bundle: '{0}'" -f $bundle.FullName)
     Write-LogInfo ("Windows Terminal license: '{0}'" -f $license.FullName)
 
-    if (-not $deps -or $deps.Count -eq 0) {
-        Write-LogWarn "No Microsoft.UI.Xaml dependency packages found under '$kitRoot'; attempting installation without explicit dependencies."
+    if (-not $xamlDeps -or $xamlDeps.Count -eq 0) {
+        Write-LogWarn "Microsoft.UI.Xaml dependency missing in Windows Terminal kit; skipping to avoid online retrieval."
+        return
     }
 
-    # Provision for all future users, if possible.
-    try {
-        Write-LogInfo "Provisioning Windows Terminal as an Appx provisioned package (Online)..."
-        Add-AppxProvisionedPackage -Online `
-            -PackagePath $bundle.FullName `
-            -LicensePath $license.FullName `
-            -DependencyPackagePath $deps `
-            -ErrorAction Stop | Out-Null
+    if (-not $vcDeps -or $vcDeps.Count -eq 0) {
+        Write-LogWarn "Microsoft.VCLibs.*Desktop dependency missing in Windows Terminal kit; skipping to avoid online retrieval."
+        return
+    }
 
-        Write-LogInfo "Windows Terminal provisioned successfully."
+    $appxApiAvailable = $false
+    try {
+        $null = [Windows.Management.Deployment.PackageManager]::new()
+        $appxApiAvailable = $true
     }
     catch {
-        Write-LogError "Add-AppxProvisionedPackage for Windows Terminal failed: $($_.Exception.Message)"
+        Write-LogWarn "AppX deployment API unavailable on this build: $($_.Exception.Message); skipping Windows Terminal installation."
     }
 
-    # Ensure the current Administrator session has Windows Terminal installed.
+    $addAppxCmd = Get-Command -Name 'Add-AppxPackage' -ErrorAction SilentlyContinue
+
+    if (-not $appxApiAvailable -or -not $addAppxCmd) {
+        Write-LogWarn "Add-AppxPackage/AppX stack not present; skipping Windows Terminal installation to avoid hangs."
+        return
+    }
+
+    $installedForCurrentUser = $false
+
+    # Install for current user first; provisioning is attempted only after a successful install.
     try {
-        Write-LogInfo "Installing Windows Terminal for the current user via Add-AppxPackage..."
-        $addAppxCmd = Get-Command -Name 'Add-AppxPackage' -ErrorAction SilentlyContinue
+        Write-LogInfo "Installing Windows Terminal for the current user via Add-AppxPackage (offline kit)..."
         $supportsLicensePath = $addAppxCmd -and $addAppxCmd.Parameters.ContainsKey('LicensePath')
 
         if ($supportsLicensePath -and $license) {
@@ -336,10 +352,42 @@ function Install-WindowsTerminal {
                             -ErrorAction Stop | Out-Null
         }
 
+        $installedForCurrentUser = $true
         Write-LogInfo "Windows Terminal Add-AppxPackage completed for current user."
     }
     catch {
         Write-LogError "Add-AppxPackage for Windows Terminal failed: $($_.Exception.Message)"
+    }
+
+    $addProvisionCmd = Get-Command -Name 'Add-AppxProvisionedPackage' -ErrorAction SilentlyContinue
+
+    if (-not $addProvisionCmd) {
+        Write-LogWarn "Add-AppxProvisionedPackage not available; skipping provisioning step."
+        return
+    }
+
+    if (-not $installedForCurrentUser) {
+        Write-LogWarn "Skipping provisioning because current-user installation did not complete successfully."
+        return
+    }
+
+    if (-not $appxApiAvailable) {
+        Write-LogWarn "AppX deployment API unavailable; cannot provision Windows Terminal for all users."
+        return
+    }
+
+    try {
+        Write-LogInfo "Provisioning Windows Terminal as an Appx provisioned package (offline kit)..."
+        Add-AppxProvisionedPackage -Online `
+            -PackagePath $bundle.FullName `
+            -LicensePath $license.FullName `
+            -DependencyPackagePath $deps `
+            -ErrorAction Stop | Out-Null
+
+        Write-LogInfo "Windows Terminal provisioned successfully."
+    }
+    catch {
+        Write-LogError "Add-AppxProvisionedPackage for Windows Terminal failed: $($_.Exception.Message)"
     }
 }
 
@@ -378,20 +426,29 @@ function Set-DefaultTerminalToWindowsTerminal {
 function Configure-DefenderAndFirewall {
     # Disable Defender core protections and Windows Firewall profiles.
     Write-LogInfo "Configuring Microsoft Defender Antivirus preferences..."
-    try {
-        Set-MpPreference -DisableRealtimeMonitoring $true `
-                         -DisableBlockAtFirstSeen $true `
-                         -DisableIOAVProtection $true `
-                         -DisableScriptScanning $true `
-                         -MAPSReporting Disabled `
-                         -SubmitSamplesConsent NeverSend `
-                         -PUAProtection Disabled `
-                         -ErrorAction Stop
+    $mpCmdletsPresent = (Get-Command -Name 'Set-MpPreference' -ErrorAction SilentlyContinue) -and
+                        (Get-Command -Name 'Add-MpPreference' -ErrorAction SilentlyContinue)
 
-        Write-LogInfo "Defender preferences updated."
+    if ($mpCmdletsPresent) {
+        try {
+            Set-MpPreference -DisableRealtimeMonitoring $true `
+                             -DisableBlockAtFirstSeen $true `
+                             -DisableIOAVProtection $true `
+                             -DisableScriptScanning $true `
+                             -MAPSReporting Disabled `
+                             -SubmitSamplesConsent NeverSend `
+                             -PUAProtection Disabled `
+                             -ErrorAction Stop
+
+            Write-LogInfo "Defender preferences updated."
+        }
+        catch {
+            Write-LogError "Failed to set Defender preferences: $($_.Exception.Message)"
+        }
     }
-    catch {
-        Write-LogError "Failed to set Defender preferences: $($_.Exception.Message)"
+    else {
+        # Defender module typically disappears after third-party remover; rely on policy keys only.
+        Write-LogWarn "Defender cmdlets (Set-MpPreference/Add-MpPreference) are unavailable; skipping cmdlet calls and falling back to policy keys only."
     }
 
     # Try to hard-disable Defender via policy keys (best effort; may be ignored on newer builds).
@@ -427,29 +484,31 @@ function Configure-DefenderAndFirewall {
     }
 
     # Add very broad exclusions so Defender does not touch our payloads or downloads.
-    try {
-        $downloads = Get-DownloadsPath
-        $exclusionPaths = @(
-            'C:\Windows\Setup\Scripts',
-            'C:\Windows\Setup\Scripts\Payloads',
-            $downloads
-        )
+    if ($mpCmdletsPresent) {
+        try {
+            $downloads = Get-DownloadsPath
+            $exclusionPaths = @(
+                'C:\Windows\Setup\Scripts',
+                'C:\Windows\Setup\Scripts\Payloads',
+                $downloads
+            )
 
-        Write-LogInfo ("Adding Defender exclusion paths: {0}" -f ($exclusionPaths -join '; '))
-        Add-MpPreference -ExclusionPath $exclusionPaths -ErrorAction Stop
+            Write-LogInfo ("Adding Defender exclusion paths: {0}" -f ($exclusionPaths -join '; '))
+            Add-MpPreference -ExclusionPath $exclusionPaths -ErrorAction Stop
 
-        $exclusionExtensions = @('exe', 'dll', 'sys')
-        Write-LogInfo ("Adding Defender exclusion extensions: {0}" -f ($exclusionExtensions -join '; '))
-        Add-MpPreference -ExclusionExtension $exclusionExtensions -ErrorAction Stop
+            $exclusionExtensions = @('exe', 'dll', 'sys')
+            Write-LogInfo ("Adding Defender exclusion extensions: {0}" -f ($exclusionExtensions -join '; '))
+            Add-MpPreference -ExclusionExtension $exclusionExtensions -ErrorAction Stop
 
-        $exclusionProcesses = @('powershell.exe', 'pwsh.exe', 'msiexec.exe')
-        Write-LogInfo ("Adding Defender exclusion processes: {0}" -f ($exclusionProcesses -join '; '))
-        Add-MpPreference -ExclusionProcess $exclusionProcesses -ErrorAction Stop
+            $exclusionProcesses = @('powershell.exe', 'pwsh.exe', 'msiexec.exe')
+            Write-LogInfo ("Adding Defender exclusion processes: {0}" -f ($exclusionProcesses -join '; '))
+            Add-MpPreference -ExclusionProcess $exclusionProcesses -ErrorAction Stop
 
-        Write-LogInfo "Defender exclusions configured."
-    }
-    catch {
-        Write-LogError "Failed to configure Defender exclusions: $($_.Exception.Message)"
+            Write-LogInfo "Defender exclusions configured."
+        }
+        catch {
+            Write-LogError "Failed to configure Defender exclusions: $($_.Exception.Message)"
+        }
     }
 
     # Best-effort attempt to stop and disable the Defender service. This may be blocked by the OS / tamper protection.
@@ -481,26 +540,28 @@ function Configure-DefenderAndFirewall {
         Write-LogWarn "Failed to query WinDefend service: $($_.Exception.Message)"
     }
 
-    try {
-        $mpPref = Get-MpPreference
-        $mpStatus = Get-MpComputerStatus
+    if ($mpCmdletsPresent) {
+        try {
+            $mpPref = Get-MpPreference
+            $mpStatus = Get-MpComputerStatus
 
-        Write-LogInfo ("Defender preference snapshot: " +
-                       "RealTimeProtectionEnabled={0}, BlockAtFirstSeen={1}, IOAVProtectionEnabled={2}, ScriptScanningEnabled={3}, MAPSReporting={4}, SubmitSamplesConsent={5}, PUAProtection={6}" -f
-                       $mpPref.RealTimeProtectionEnabled,
-                       $mpPref.BlockAtFirstSeen,
-                       $mpPref.IOAVProtectionEnabled,
-                       $mpPref.ScriptScanningEnabled,
-                       $mpPref.MAPSReporting,
-                       $mpPref.SubmitSamplesConsent,
-                       $mpPref.PUAProtection)
+            Write-LogInfo ("Defender preference snapshot: " +
+                           "RealTimeProtectionEnabled={0}, BlockAtFirstSeen={1}, IOAVProtectionEnabled={2}, ScriptScanningEnabled={3}, MAPSReporting={4}, SubmitSamplesConsent={5}, PUAProtection={6}" -f
+                           $mpPref.RealTimeProtectionEnabled,
+                           $mpPref.BlockAtFirstSeen,
+                           $mpPref.IOAVProtectionEnabled,
+                           $mpPref.ScriptScanningEnabled,
+                           $mpPref.MAPSReporting,
+                           $mpPref.SubmitSamplesConsent,
+                           $mpPref.PUAProtection)
 
-        Write-LogInfo ("Defender computer status snapshot: RealTimeProtectionEnabled={0}, IsTamperProtected={1}" -f
-                       $mpStatus.RealTimeProtectionEnabled,
-                       $mpStatus.IsTamperProtected)
-    }
-    catch {
-        Write-LogError "Failed to query Defender status: $($_.Exception.Message)"
+            Write-LogInfo ("Defender computer status snapshot: RealTimeProtectionEnabled={0}, IsTamperProtected={1}" -f
+                           $mpStatus.RealTimeProtectionEnabled,
+                           $mpStatus.IsTamperProtected)
+        }
+        catch {
+            Write-LogError "Failed to query Defender status: $($_.Exception.Message)"
+        }
     }
 
     Write-LogInfo "Disabling all Windows Firewall profiles..."
