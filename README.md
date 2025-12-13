@@ -4,6 +4,7 @@
 
 - 集成 `Autounattend.xml`，自动完成 OOBE、自动登录 Administrator。
 - 在 **首次自动登录 Administrator** 时自动执行 `root.ps1`，进行首启配置。
+- 额外提供 `SetupComplete.cmd` 作为兜底触发：在 Setup 完成阶段写入 `RunOnce`，确保首次交互登录必定执行 `root.ps1`（即使 `FirstLogonCommands` 未生效）。
 - 在首启阶段自动：
   - 从本地 `MSI` 安装非 Store 版 `PowerShell 7.5.4`；
   - 将交互式 `Windows PowerShell` 默认跳转到 `PowerShell 7`；
@@ -11,9 +12,9 @@
   - 将预置的软件安装包从镜像中复制到 `C:\Users\Administrator\Downloads`；
   - 从本地预装包注册并安装 Windows Terminal，并将其配置为当前用户的默认控制台宿主；
   - 对部分软件执行静默安装（仅记录错误，不中断首启流程），包括：
+    - `SteamSetup.exe`（优先启动安装）
     - `7z2501-x64.exe`
     - `581.57-desktop-win10-win11-64bit-international-dch-whql.exe`（NVIDIA 驱动，使用静默和清洁安装参数）
-    - `SteamSetup.exe`
     - `VC_redist.x64.exe`
     - `VC_redist.x86.exe`
   - 可选执行自定义脚本（如 KMS 激活、额外调试配置等）。
@@ -31,6 +32,14 @@
     - 设置 `windowsPE` 阶段的语言区域；
     - 配置 `oobeSystem` 阶段跳过 OOBE、自动登录 Administrator；
     - 在首次登录时通过 `FirstLogonCommands` 调用 `root.ps1`。
+
+- `SetupComplete.cmd`
+  - Windows Setup 在安装完成阶段以 SYSTEM 自动执行的脚本：`%WINDIR%\\Setup\\Scripts\\SetupComplete.cmd`。
+  - 负责：写入 `HKLM\\...\\RunOnce` 兜底项，在首次交互登录时触发 `FirstLogonBootstrap.ps1`（避免 `FirstLogonCommands` 偶发不执行导致需要手动运行）。
+
+- `FirstLogonBootstrap.ps1`
+  - `SetupComplete.cmd` 的 RunOnce 入口脚本。
+  - 负责：在 `RootPhase=1` 且 Phase2 RunOnce 已存在时主动跳过，避免同一登录会话中“Phase0 刚触发 DefenderRemover、Phase1 又被重复入口提前执行”的时序问题；其余情况转发到 `root.ps1` loader。
 
 - `root.ps1`  
   - PowerShell 版本兼容 loader：在 **安装完成之后、首次自动登录 Administrator 时由 `Autounattend.xml` 调用**，也是 RunOnce 的二阶段入口。  
@@ -192,6 +201,8 @@ Windows 安装程序对 `sources\$OEM$` 目录有约定：
 │     └─ $$
 │        └─ Setup
 │           └─ Scripts
+│              ├─ SetupComplete.cmd        ← 兜底触发：写入 RunOnce 调用 FirstLogonBootstrap.ps1
+│              ├─ FirstLogonBootstrap.ps1  ← SetupComplete RunOnce 入口（避免 Phase1 提前跑）
 │              ├─ root.ps1                 ← 来自仓库 root.ps1
 │              ├─ root.core.ps1            ← 业务编排主脚本（PowerShell 7）
 │              ├─ Set-MemoryDmaOptimization.ps1  ← 内存/DMA优化脚本（可选手动执行）

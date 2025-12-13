@@ -2,6 +2,9 @@
 
 | 日期 (UTC+0) | 决策/灵感 | 背景 | 影响 |
 | --- | --- | --- | --- |
+| 2025-12-13 | 新增 `SetupComplete.cmd` + `FirstLogonBootstrap.ps1` 写入 Phase0 RunOnce 作为兜底触发，并在 `root.core.ps1` 增加 `RootPhase>=2` 幂等退出与命名 Mutex | 目标机出现“安装后未自动执行 root.ps1”的偶发现象；同时多入口触发可能导致并发或时序串扰 | 不依赖单一入口，首启可自愈；避免并发重复安装/写注册表；两阶段场景下避免 Phase1 被重复入口提前执行 |
+| 2025-12-13 | 修复 Windows Terminal 离线依赖合并逻辑：强制数组化避免 `FileInfo + FileInfo` | `Get-ChildItem` 仅匹配 1 个依赖文件时变量为 `FileInfo`，使用 `+` 触发 `op_Addition` 崩溃 | Windows Terminal 安装步骤不再因依赖数量为 1 而中断；离线安装路径更稳定 |
+| 2025-12-13 | 将 Steam 安装提至应用安装步骤的最前，优先启动 | 首启流程中任意后续步骤异常/重启都可能导致 Steam 迟迟未开始安装 | Steam 更早开始安装，降低“首启没装上”的概率 |
 | 2025-12-10 | Windows Terminal 安装前强制校验 AppX 部署栈与 UI.Xaml/VCLibs 离线依赖，缺失即跳过 | 目标机可能裁剪了 AppX 组件，或缺少 VCLibs 导致 Add-AppxPackage 尝试联网并挂起 | 避免联网安装与长时间等待，确保首启流程可控且纯离线 |
 | 2025-12-10 | Defender 模块缺失时降级为仅写策略注册表，跳过 Mp cmdlet | 第三方 Defender Remover 会移除 Defender 模块，原逻辑大量报错 | 日志更干净，仍维持策略级禁用与防火墙关闭 |
 | 2025-12-10 | MSIX 版 PowerShell 7 跳过 LocalMachine 执行策略写入 | WindowsApps 下的 pwsh 包路径只读，Set-ExecutionPolicy LocalMachine 会报拒绝访问 | 消除无意义错误输出，仍保持 CurrentUser 作用域 Bypass |

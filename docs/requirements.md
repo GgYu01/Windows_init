@@ -15,9 +15,14 @@
 | R6 | Windows Terminal 必须全离线安装：缺少 AppX 栈或 XAML/VCLibs 依赖时应跳过，避免联网与长时间挂起 | 高 | 完成 | `Install-WindowsTerminal` 新增 AppX 部署栈探测与依赖完整性检查，缺失即跳过 |
 | R7 | Defender 模块被第三方移除时仍应静默降级，避免 Set-MpPreference/ Add-MpPreference 报错刷屏 | 中 | 完成 | 缺失 Defender cmdlet 时仅写策略注册表，跳过 mp cmdlet 调用和状态查询 |
 | R8 | MSIX 版 PowerShell 7 不可写 LocalMachine 执行策略，需绕过并给出明确告警 | 低 | 完成 | `Set-ExecutionPolicies` 检测 `PSHOME` 位于 WindowsApps 时跳过 LocalMachine 作用域 |
+| R9 | 修复 Windows Terminal 离线依赖枚举在“仅匹配到 1 个文件”时的 `op_Addition` 崩溃 | 高 | 完成 | 将 `Get-ChildItem` 返回值强制转为数组，避免 `FileInfo + FileInfo` |
+| R10 | 首启自动触发需可自愈：即使 `FirstLogonCommands` 未执行也能在首次交互登录自动跑 `root.ps1` | 高 | 完成 | 新增 `SetupComplete.cmd` + `FirstLogonBootstrap.ps1` 写入 RunOnce 兜底并规避两阶段时序串扰；`root.core.ps1` 增加 `RootPhase>=2` 幂等退出与互斥锁防并发 |
+| R11 | Steam 在所有静默安装任务中应最高优先级启动 | 中 | 完成 | 将 Steam 安装移动到 `Install-Applications` 的第一位并保持后台启动 |
 
 ## 用户故事
 - 作为镜像自动化维护者，我需要 `root.ps1` 在首次登录时可以无语法错误地执行，以便所有配置步骤可顺利跑完。
+- 作为使用者，我需要安装完成后无需手动执行命令，首启流程能自动触发并在偶发入口失效时自愈。
+- 作为游戏环境维护者，我希望 Steam 尽早启动安装，避免后续步骤异常或重启导致安装优先级下降。
 - 作为运维工程师，我希望日志采集在脚本异常时也能安全关闭，避免阻塞后续动作。
 - 作为新加入的开发者，我需要一套中文文档来理解系统设计、演进决策与接手步骤。
 

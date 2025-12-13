@@ -1,7 +1,8 @@
 # 设计与理念（root.ps1 首启编排）
 
 ## 系统概览
-- 入口：`Autounattend.xml` 在首次自动登录 Administrator 后调用 `C:\Windows\Setup\Scripts\root.ps1`。
+- 入口（主）：`Autounattend.xml` 在首次自动登录 Administrator 后调用 `C:\Windows\Setup\Scripts\root.ps1`。
+- 入口（兜底）：`SetupComplete.cmd` 在安装完成阶段写入 `RunOnce`，确保首次交互登录也会调用 `root.ps1`（避免 `FirstLogonCommands` 偶发不执行）。
 - 执行环境切换：`root.ps1` 为轻量 loader，若当前是 PowerShell 5.1 则尝试用本地 MSI 安装/定位 `pwsh.exe` 并以 7.x 重新执行 `root.core.ps1`；7.x 下直接调用核心脚本。
 - 目标：单次或分阶段完成 Defender/防火墙关闭、PowerShell/Windows Terminal 配置、内存&DMA 优化、payload 复制与应用静默安装。
 - 主流程封装为 `Invoke-RootOrchestration`，Transcript 生命周期由 `Start-RootTranscript` / `Stop-RootTranscript` 辅助函数集中管理，兜底捕获未处理异常。
@@ -9,22 +10,27 @@
 ## 核心流程
 ```
 Autounattend -> root.ps1 (loader)
+SetupComplete.cmd -> RunOnce -> FirstLogonBootstrap.ps1 -> root.ps1 (loader)   # fallback trigger
   -> 检测/安装 pwsh.exe
   -> 以 PowerShell 7 调用 root.core.ps1
       -> Invoke-RootOrchestration
+         -> Acquire mutex (single-instance)
          -> Start-RootTranscript (返回启动标记)
          -> 读取 RootPhase
             -> Phase0: 安全/防护配置 + 可选 DefenderRemover -> 可能 return
             -> Phase1: PowerShell/Terminal/优化/复制/安装/自定义脚本
-         -> Phase1 完成且 RootPhase=1 -> Set RootPhase=2
+         -> Phase1 完成 -> Set RootPhase=2（单阶段/二阶段均标记完成）
          -> Stop-RootTranscript (仅在启动成功时)
+         -> Release mutex
 ```
 
 ## 关键设计点
 - **阶段控制**：通过 `RootPhase` 注册表值与 `RunOnce` 实现二阶段执行；保持幂等。
 - **执行环境兼容**：`RunOnce` 指向 loader（root.ps1），确保二阶段在 PowerShell 5.1 下也能先安装/切换到 7.x 再继续。
+- **入口可用性兜底**：在 `SetupComplete.cmd` 中写入 Phase0 的 `RunOnce`（指向 `FirstLogonBootstrap.ps1`），与 `FirstLogonCommands` 相互独立，避免单点入口失效导致必须手动执行，同时规避两阶段场景的时序串扰。
 - **步骤包装**：`Invoke-Step` 统一捕获并记录每个子步骤的异常，避免全局中断。
 - **日志可靠性**：`Start-RootTranscript` 返回布尔标志，`Stop-RootTranscript` 仅在成功启动时执行，避免 Stop-Transcript 抛错导致误判。
+- **单实例保护**：`Invoke-RootOrchestration` 通过命名 Mutex 防止多个触发源并发执行造成重复安装/写注册表。
 - **结构清晰**：Transcript 处理抽象为函数，主 try/finally 仅负责业务步骤，降低 PowerShell 5.1 对嵌套 try 的误判概率。
 - **可扩展性**：主流程集中在单一函数，后续可按顺序插入新 `Invoke-Step` 而不破坏结构。
 - **配置等效性**：在 PowerShell 7 中仍显式写入 Windows PowerShell profile 与执行策略（通过 `powershell.exe` 调用），保持旧版交互控制台的行为一致。
@@ -36,7 +42,7 @@ Autounattend -> root.ps1 (loader)
 - **输入**：本地预置 MSI/EXE、注册表键值、RunOnce 项。
 - **状态写入**：
   - `HKLM\SOFTWARE\WindowsInit\RootPhase`（阶段标记）
-  - `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce`（二阶段入口）
+  - `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce`（Phase0/Phase2 入口）
   - 各安全策略与电源/网络优化相关注册表键。
 - **输出**：桌面日志 `FirstBoot-*.log`、可能的应用安装日志（各安装器自身产生）。
 

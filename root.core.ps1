@@ -286,9 +286,10 @@ function Install-WindowsTerminal {
         $license = $null
     }
 
-    $xamlDeps = Get-ChildItem -Path $kitRoot -Filter 'Microsoft.UI.Xaml.2.8_*_*.appx' -ErrorAction SilentlyContinue
-    $vcDeps   = Get-ChildItem -Path $kitRoot -Filter 'Microsoft.VCLibs.*Desktop*_*.appx' -ErrorAction SilentlyContinue
-    $deps     = @($xamlDeps + $vcDeps | Select-Object -ExpandProperty FullName)
+    # Force array semantics to avoid FileInfo '+' FileInfo (op_Addition) when only one match exists.
+    $xamlDeps = @(Get-ChildItem -Path $kitRoot -Filter 'Microsoft.UI.Xaml.2.8_*_*.appx' -ErrorAction SilentlyContinue)
+    $vcDeps   = @(Get-ChildItem -Path $kitRoot -Filter 'Microsoft.VCLibs.*Desktop*_*.appx' -ErrorAction SilentlyContinue)
+    $deps     = @((@($xamlDeps) + @($vcDeps)) | Select-Object -ExpandProperty FullName)
 
     if (-not $bundle) {
         Write-LogWarn "Windows Terminal bundle (*.msixbundle) not found under '$kitRoot'; skipping."
@@ -882,6 +883,27 @@ function Install-Applications {
         return
     }
 
+    # Steam - standard silent install switch /S
+    $steamExe = Join-Path -Path $payloadRoot -ChildPath 'SteamSetup.exe'
+    if (Test-Path -LiteralPath $steamExe) {
+        try {
+            Write-LogInfo "Starting Steam silent installer in background from '$steamExe'..."
+            $p = Start-Process -FilePath $steamExe -ArgumentList '/S' -PassThru
+            if ($p -and $p.Id) {
+                Write-LogInfo ("Steam installer started with PID {0}; not waiting for completion." -f $p.Id)
+            }
+            else {
+                Write-LogWarn "Steam installer process handle not available; continuing without wait."
+            }
+        }
+        catch {
+            Write-LogError "Steam installation failed: $($_.Exception.Message)"
+        }
+    }
+    else {
+        Write-LogWarn "Steam installer not found at '$steamExe'; skipping."
+    }
+
     # 7-Zip (7z2501-x64.exe) - standard silent install switch /S
     $sevenZipExe = Join-Path -Path $payloadRoot -ChildPath '7z2501-x64.exe'
     if (Test-Path -LiteralPath $sevenZipExe) {
@@ -926,27 +948,6 @@ function Install-Applications {
     }
     else {
         Write-LogWarn "NVIDIA driver installer not found at '$nvidiaExe'; skipping."
-    }
-
-    # Steam - standard silent install switch /S
-    $steamExe = Join-Path -Path $payloadRoot -ChildPath 'SteamSetup.exe'
-    if (Test-Path -LiteralPath $steamExe) {
-        try {
-            Write-LogInfo "Starting Steam silent installer in background from '$steamExe'..."
-            $p = Start-Process -FilePath $steamExe -ArgumentList '/S' -PassThru
-            if ($p -and $p.Id) {
-                Write-LogInfo ("Steam installer started with PID {0}; not waiting for completion." -f $p.Id)
-            }
-            else {
-                Write-LogWarn "Steam installer process handle not available; continuing without wait."
-            }
-        }
-        catch {
-            Write-LogError "Steam installation failed: $($_.Exception.Message)"
-        }
-    }
-    else {
-        Write-LogWarn "Steam installer not found at '$steamExe'; skipping."
     }
 
     # Visual C++ Redistributable x64
@@ -1068,6 +1069,23 @@ function Stop-RootTranscript {
 
 function Invoke-RootOrchestration {
     # Main entry point coordinating first-boot tasks and logging.
+    $mutexName = 'Global\WindowsInit.RootOrchestration'
+    $mutex = $null
+    $mutexAcquired = $false
+    try {
+        # Prevent multiple auto-run triggers (FirstLogonCommands/RunOnce/etc.) from running in parallel.
+        $mutex = [System.Threading.Mutex]::new($false, $mutexName)
+        $mutexAcquired = $mutex.WaitOne(0)
+    }
+    catch {
+        Write-LogWarn "Failed to acquire mutex '$mutexName': $($_.Exception.Message); continuing without single-instance protection."
+    }
+
+    if ($mutex -and (-not $mutexAcquired)) {
+        Write-LogWarn "Another Windows_init instance is already running; skipping this invocation."
+        return
+    }
+
     $desktopPath = Get-DesktopPath
     $logPath     = Join-Path -Path $desktopPath -ChildPath ("FirstBoot-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
     $transcriptStarted = Start-RootTranscript -Path $logPath
@@ -1075,6 +1093,11 @@ function Invoke-RootOrchestration {
     try {
         $rootPhase = Get-RootPhase
         Write-LogInfo ("Detected RootPhase={0}." -f $rootPhase)
+
+        if ($rootPhase -ge 2) {
+            Write-LogInfo "RootPhase indicates configuration already completed; skipping."
+            return
+        }
 
         # Phase 0: first login after installation.
         # If the Defender Remover tool exists, only perform Defender-related actions, register phase-2 RunOnce, and let the tool reboot the system.
@@ -1113,7 +1136,7 @@ function Invoke-RootOrchestration {
         Invoke-Step -Name 'Install core applications'          -Action { Install-Applications }
         Invoke-Step -Name 'Invoke user customization script'   -Action { Invoke-UserCustomizationScript }
 
-        if ($rootPhase -eq 1) {
+        if ($rootPhase -lt 2) {
             Set-RootPhase 2
         }
     }
@@ -1125,6 +1148,14 @@ function Invoke-RootOrchestration {
     }
     finally {
         Stop-RootTranscript -Started $transcriptStarted
+
+        if ($mutex -and $mutexAcquired) {
+            try { $mutex.ReleaseMutex() } catch { }
+        }
+
+        if ($mutex) {
+            $mutex.Dispose()
+        }
     }
 }
 
