@@ -8,9 +8,16 @@
 1. 静态解析（Linux 亦可）：`pwsh -NoLogo -NoProfile -Command "[System.Management.Automation.Language.Parser]::ParseFile('root.ps1',[ref]$null,[ref]$null);[System.Management.Automation.Language.Parser]::ParseFile('root.core.ps1',[ref]$null,[ref]$null)"`（无输出即通过）。
 2. Loader 自检（在隔离 VM 上进行）：确认 `PowerShell-7.5.4-win-x64.msi` 与 `root.core.ps1` 同目录；用 `powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\\root.ps1` 观察是否自动安装/定位 `pwsh.exe`，退出码为 0。
 3. 逻辑入口：核心脚本末尾已调用 `Invoke-RootOrchestration`，无需额外入口。
-4. 关注日志：首启生成 `FirstBoot-*.log`，包含每步的 Info/Warn/Error。
+4. 关注日志：
+   - 主 Transcript：`C:\ProgramData\WindowsInit\Logs\FirstBoot-*.log`
+   - 桌面可见副本：`C:\Users\Public\Desktop\WindowsInit-Debug\`
+   - 入口级早期日志：`SetupComplete-*` / `FirstLogonBootstrap-*` / `RootLoader-*`（用于判断是否“未触发/早退”）
 5. Windows Terminal 离线包自检：`WindowsTerminal/` 需包含 msixbundle、License、`Microsoft.UI.Xaml.2.8_*` x86/x64、`Microsoft.VCLibs.*Desktop*` x86/x64；缺失任一或 AppX 栈被裁剪时脚本会跳过安装与预配。
 6. 触发自检：确认 `%WINDIR%\\Setup\\Scripts\\SetupComplete.cmd` 与 `%WINDIR%\\Setup\\Scripts\\FirstLogonBootstrap.ps1` 存在并可写入 `HKLM\\...\\RunOnce\\WindowsInit-Phase0`；若同时存在 `FirstLogonCommands`，兜底入口会在 `RootPhase=1` 且 Phase2 RunOnce 已排队时自动跳过。
+7. 无侵入验证（不影响现有下载/已装程序）：
+   - 基础探针：`WindowsInitDiagnostics.ps1 -RegisterProbe -Scope User -ProbeMode Bootstrap`
+   - 完整链路探针：`WindowsInitDiagnostics.ps1 -RegisterProbe -Scope User -ProbeMode Chain`
+   - 然后注销/重新登录，检查 `WindowsInit-Debug` 是否出现对应日志（Probe/ProbeChain 均只写日志并退出）。
 
 ## 修改指引
 - 仅在 `Invoke-RootOrchestration` 内追加新的 `Invoke-Step`，保持阶段顺序。
@@ -31,8 +38,7 @@
 ## 常见故障切入点
 - Transcript 无法启动：检查执行策略或磁盘权限，必要时手动创建桌面日志目录。
 - RunOnce 未注册：确认当前用户为 Administrator 且注册表写入未被策略阻断。
-- 安装后未自动执行 `root.ps1`：优先检查安装介质是否包含 `Autounattend.xml` 与 `%WINDIR%\\Setup\\Scripts\\SetupComplete.cmd`；进入系统后检查 `HKLM\\...\\RunOnce` 是否存在 `WindowsInit-Phase0`。
-- 安装后未自动执行 `root.ps1`：优先检查安装介质是否包含 `Autounattend.xml`、`SetupComplete.cmd`、`FirstLogonBootstrap.ps1`；进入系统后检查 `HKLM\\...\\RunOnce` 是否存在 `WindowsInit-Phase0`。
+- 安装后未自动执行 `root.ps1`：优先检查安装介质是否包含 `Autounattend.xml`、`SetupComplete.cmd`、`FirstLogonBootstrap.ps1`；进入系统后检查 `HKLM\\...\\RunOnce` 是否存在 `WindowsInit-Phase0`；同时查看 `C:\\Users\\Public\\Desktop\\WindowsInit-Debug\\SetupComplete-*.log` 判断 SetupComplete 是否实际执行。
 - 安装器静默参数失效：查看各安装器对应的日志/退出码，并在 `Install-Applications` 中追加专用处理。
 - Windows Terminal 未安装：常见原因是缺失 VCLibs/UI.Xaml 依赖或目标系统裁剪了 AppX 部署栈，脚本会跳过以避免联网安装；补齐离线包或在支持 AppX 的版本上安装。
 - Defender 步骤报错消失：当第三方 Defender Remover 删除了 Mp 模块时，脚本会仅写策略注册表并跳过 Mp cmdlet，属预期降级行为。

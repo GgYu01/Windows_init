@@ -2,6 +2,7 @@
 
 | 日期 (UTC+0) | 决策/灵感 | 背景 | 影响 |
 | --- | --- | --- | --- |
+| 2025-12-14 | 强化“触发链路可观测性”：多落点日志 + Probe 验证脚本 | 仍出现“开机不自动执行且桌面无日志”，需要区分：入口未触发 / 触发但早退 / 触发但日志写错位置；同时重装成本高 | SetupComplete/Bootstrap/Loader 先写调试日志，root.core 主 Transcript 落盘到 ProgramData 并复制到 Public Desktop；提供 `WindowsInitDiagnostics.ps1` + `-Probe` 在不影响现有程序的前提下验证 RunOnce 是否工作 |
 | 2025-12-13 | 新增 `SetupComplete.cmd` + `FirstLogonBootstrap.ps1` 写入 Phase0 RunOnce 作为兜底触发，并在 `root.core.ps1` 增加 `RootPhase>=2` 幂等退出与命名 Mutex | 目标机出现“安装后未自动执行 root.ps1”的偶发现象；同时多入口触发可能导致并发或时序串扰 | 不依赖单一入口，首启可自愈；避免并发重复安装/写注册表；两阶段场景下避免 Phase1 被重复入口提前执行 |
 | 2025-12-13 | 修复 Windows Terminal 离线依赖合并逻辑：强制数组化避免 `FileInfo + FileInfo` | `Get-ChildItem` 仅匹配 1 个依赖文件时变量为 `FileInfo`，使用 `+` 触发 `op_Addition` 崩溃 | Windows Terminal 安装步骤不再因依赖数量为 1 而中断；离线安装路径更稳定 |
 | 2025-12-13 | 将 Steam 安装提至应用安装步骤的最前，优先启动 | 首启流程中任意后续步骤异常/重启都可能导致 Steam 迟迟未开始安装 | Steam 更早开始安装，降低“首启没装上”的概率 |

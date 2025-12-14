@@ -18,7 +18,10 @@
     - `VC_redist.x64.exe`
     - `VC_redist.x86.exe`
   - 可选执行自定义脚本（如 KMS 激活、额外调试配置等）。
-- 全流程在桌面生成详细的首启日志文件，所有错误只记录不阻塞安装和启动。
+- 全流程会生成详细日志：
+  - 主 Transcript：`C:\ProgramData\WindowsInit\Logs\FirstBoot-*.log`
+  - 同步副本：`C:\Users\Public\Desktop\WindowsInit-Debug\`（用于“没看到桌面日志”的快速排查）
+  - 入口级早期日志：`SetupComplete.cmd` / `FirstLogonBootstrap.ps1` / `root.ps1` 也会各自写入 `WindowsInit-Debug`，便于定位究竟“没触发”还是“触发后早退”。
 
 ---
 
@@ -40,6 +43,13 @@
 - `FirstLogonBootstrap.ps1`
   - `SetupComplete.cmd` 的 RunOnce 入口脚本。
   - 负责：在 `RootPhase=1` 且 Phase2 RunOnce 已存在时主动跳过，避免同一登录会话中“Phase0 刚触发 DefenderRemover、Phase1 又被重复入口提前执行”的时序问题；其余情况转发到 `root.ps1` loader。
+  - 支持 `-Probe`：仅写日志并退出（不执行任何安装/配置），用于在系统内验证 RunOnce 是否可靠触发。
+  - 支持 `-ProbeChain`：执行“完整链路探针”（Bootstrap → Loader → Core 的 Probe 模式），仍然只写日志不做任何系统修改，用于验证整条链路是否可达。
+
+- `WindowsInitDiagnostics.ps1`
+  - 诊断脚本：检查关键文件是否存在、`RootPhase`、RunOnce 项是否已写入。
+  - 可选 `-RegisterProbe`：注册一个“只写日志不做任何改动”的 RunOnce 探针，帮助你在不影响现有程序的情况下验证自动触发链路。
+  - 可选 `-ProbeMode Chain`：注册完整链路探针（调用 `FirstLogonBootstrap.ps1 -ProbeChain`）。
 
 - `root.ps1`  
   - PowerShell 版本兼容 loader：在 **安装完成之后、首次自动登录 Administrator 时由 `Autounattend.xml` 调用**，也是 RunOnce 的二阶段入口。  

@@ -9,20 +9,50 @@
   - Writes a detailed transcript log to the desktop and never aborts setup.
 #>
 
+param(
+    [ValidateSet('Normal', 'Probe')]
+    [string]$Mode = 'Normal'
+)
+
 $ErrorActionPreference = 'Stop'  # Fail fast inside each step; step wrapper catches.
+
+$script:EarlyLogPath = $null
+
+function Write-EarlyFileLog {
+    # Best-effort file log for diagnosing cases where transcript/desktop logging is not available.
+    param(
+        [Parameter(Mandatory = $true)][string]$Level,
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+
+    if (-not $script:EarlyLogPath) {
+        return
+    }
+
+    try {
+        $line = "[{0}] [{1}] {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $Level, $Message
+        Add-Content -Path $script:EarlyLogPath -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
+    }
+    catch {
+        # Ignore logging failures.
+    }
+}
 
 function Write-LogInfo {
     param([string]$Message)
+    Write-EarlyFileLog -Level 'INFO' -Message $Message
     Write-Host "[INFO ] $Message"
 }
 
 function Write-LogWarn {
     param([string]$Message)
+    Write-EarlyFileLog -Level 'WARN' -Message $Message
     Write-Warning "[WARN ] $Message"
 }
 
 function Write-LogError {
     param([string]$Message)
+    Write-EarlyFileLog -Level 'ERROR' -Message $Message
     Write-Error "[ERROR] $Message" -ErrorAction Continue
 }
 
@@ -1069,6 +1099,13 @@ function Stop-RootTranscript {
 
 function Invoke-RootOrchestration {
     # Main entry point coordinating first-boot tasks and logging.
+    $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $logRoot = Join-Path -Path ($env:ProgramData ? $env:ProgramData : 'C:\ProgramData') -ChildPath 'WindowsInit\Logs'
+    $null = New-Item -Path $logRoot -ItemType Directory -Force -ErrorAction SilentlyContinue
+
+    $script:EarlyLogPath = Join-Path -Path $logRoot -ChildPath ("WindowsInit-Early-{0}.log" -f $timestamp)
+    Write-LogInfo ("Windows_init starting. EarlyLogPath='{0}'." -f $script:EarlyLogPath)
+
     $mutexName = 'Global\WindowsInit.RootOrchestration'
     $mutex = $null
     $mutexAcquired = $false
@@ -1086,13 +1123,35 @@ function Invoke-RootOrchestration {
         return
     }
 
-    $desktopPath = Get-DesktopPath
-    $logPath     = Join-Path -Path $desktopPath -ChildPath ("FirstBoot-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
-    $transcriptStarted = Start-RootTranscript -Path $logPath
+    $transcriptPath = Join-Path -Path $logRoot -ChildPath ("FirstBoot-{0}.log" -f $timestamp)
+    $transcriptStarted = Start-RootTranscript -Path $transcriptPath
 
     try {
         $rootPhase = Get-RootPhase
         Write-LogInfo ("Detected RootPhase={0}." -f $rootPhase)
+        Write-LogInfo ("Execution mode: {0}." -f $Mode)
+
+        if ($Mode -eq 'Probe') {
+            # Probe mode: produce logs only, do not change the system.
+            $phase0 = $null
+            $phase2 = $null
+            try {
+                $runOnceKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce'
+                $props = Get-ItemProperty -Path $runOnceKey -ErrorAction SilentlyContinue
+                if ($props) {
+                    $phase0 = $props.'WindowsInit-Phase0'
+                    $phase2 = $props.'WindowsInit-Phase2'
+                }
+            }
+            catch {
+                # Ignore probe read errors.
+            }
+
+            Write-LogInfo ("RunOnce WindowsInit-Phase0: {0}" -f ($phase0 ? $phase0 : '<missing>'))
+            Write-LogInfo ("RunOnce WindowsInit-Phase2: {0}" -f ($phase2 ? $phase2 : '<missing>'))
+            Write-LogInfo "Probe mode completed; exiting without executing steps."
+            return
+        }
 
         if ($rootPhase -ge 2) {
             Write-LogInfo "RootPhase indicates configuration already completed; skipping."
@@ -1136,7 +1195,7 @@ function Invoke-RootOrchestration {
         Invoke-Step -Name 'Install core applications'          -Action { Install-Applications }
         Invoke-Step -Name 'Invoke user customization script'   -Action { Invoke-UserCustomizationScript }
 
-        if ($rootPhase -lt 2) {
+        if ($Mode -ne 'Probe' -and $rootPhase -lt 2) {
             Set-RootPhase 2
         }
     }
@@ -1148,6 +1207,38 @@ function Invoke-RootOrchestration {
     }
     finally {
         Stop-RootTranscript -Started $transcriptStarted
+
+        # Always try to surface logs to desktops for fast debugging.
+        $publicDebug = 'C:\Users\Public\Desktop\WindowsInit-Debug'
+        $null = New-Item -Path $publicDebug -ItemType Directory -Force -ErrorAction SilentlyContinue
+
+        try {
+            if (Test-Path -LiteralPath $script:EarlyLogPath) {
+                Copy-Item -Path $script:EarlyLogPath -Destination (Join-Path -Path $publicDebug -ChildPath (Split-Path -Leaf $script:EarlyLogPath)) -Force -ErrorAction SilentlyContinue
+            }
+        }
+        catch {
+            # Ignore desktop copy failures.
+        }
+
+        try {
+            if (Test-Path -LiteralPath $transcriptPath) {
+                Copy-Item -Path $transcriptPath -Destination (Join-Path -Path $publicDebug -ChildPath (Split-Path -Leaf $transcriptPath)) -Force -ErrorAction SilentlyContinue
+            }
+        }
+        catch {
+            # Ignore desktop copy failures.
+        }
+
+        try {
+            $desktopPath = Get-DesktopPath
+            if (Test-Path -LiteralPath $transcriptPath) {
+                Copy-Item -Path $transcriptPath -Destination (Join-Path -Path $desktopPath -ChildPath (Split-Path -Leaf $transcriptPath)) -Force -ErrorAction SilentlyContinue
+            }
+        }
+        catch {
+            # Ignore desktop copy failures.
+        }
 
         if ($mutex -and $mutexAcquired) {
             try { $mutex.ReleaseMutex() } catch { }

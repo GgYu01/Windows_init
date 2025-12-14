@@ -6,6 +6,7 @@
 - 执行环境切换：`root.ps1` 为轻量 loader，若当前是 PowerShell 5.1 则尝试用本地 MSI 安装/定位 `pwsh.exe` 并以 7.x 重新执行 `root.core.ps1`；7.x 下直接调用核心脚本。
 - 目标：单次或分阶段完成 Defender/防火墙关闭、PowerShell/Windows Terminal 配置、内存&DMA 优化、payload 复制与应用静默安装。
 - 主流程封装为 `Invoke-RootOrchestration`，Transcript 生命周期由 `Start-RootTranscript` / `Stop-RootTranscript` 辅助函数集中管理，兜底捕获未处理异常。
+- 日志输出采用“多落点”：主 Transcript 写入 `C:\ProgramData\WindowsInit\Logs`，并在结束时复制到 `C:\Users\Public\Desktop\WindowsInit-Debug`，同时入口脚本也各自写早期日志用于定位触发链路问题。
 
 ## 核心流程
 ```
@@ -30,6 +31,7 @@ SetupComplete.cmd -> RunOnce -> FirstLogonBootstrap.ps1 -> root.ps1 (loader)   #
 - **入口可用性兜底**：在 `SetupComplete.cmd` 中写入 Phase0 的 `RunOnce`（指向 `FirstLogonBootstrap.ps1`），与 `FirstLogonCommands` 相互独立，避免单点入口失效导致必须手动执行，同时规避两阶段场景的时序串扰。
 - **步骤包装**：`Invoke-Step` 统一捕获并记录每个子步骤的异常，避免全局中断。
 - **日志可靠性**：`Start-RootTranscript` 返回布尔标志，`Stop-RootTranscript` 仅在成功启动时执行，避免 Stop-Transcript 抛错导致误判。
+- **早期可观测性**：在 Transcript 之前先写入 `EarlyLogPath`（ProgramData），并将关键日志复制到 Public Desktop，确保“触发了但桌面没日志”也能定位到入口层级。
 - **单实例保护**：`Invoke-RootOrchestration` 通过命名 Mutex 防止多个触发源并发执行造成重复安装/写注册表。
 - **结构清晰**：Transcript 处理抽象为函数，主 try/finally 仅负责业务步骤，降低 PowerShell 5.1 对嵌套 try 的误判概率。
 - **可扩展性**：主流程集中在单一函数，后续可按顺序插入新 `Invoke-Step` 而不破坏结构。
@@ -44,7 +46,10 @@ SetupComplete.cmd -> RunOnce -> FirstLogonBootstrap.ps1 -> root.ps1 (loader)   #
   - `HKLM\SOFTWARE\WindowsInit\RootPhase`（阶段标记）
   - `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce`（Phase0/Phase2 入口）
   - 各安全策略与电源/网络优化相关注册表键。
-- **输出**：桌面日志 `FirstBoot-*.log`、可能的应用安装日志（各安装器自身产生）。
+- **输出**：
+  - 主 Transcript：`C:\ProgramData\WindowsInit\Logs\FirstBoot-*.log`（并复制到 `C:\Users\Public\Desktop\WindowsInit-Debug\`）
+  - 入口级早期日志：`SetupComplete-*` / `FirstLogonBootstrap-*` / `RootLoader-*`
+  - 可能的应用安装日志（各安装器自身产生）。
 
 ## 设计取舍
 - 保留局部 `try/catch`：每个外部依赖调用（安装器、注册表写入）均局部防护，确保单点失败不终止流程；但将 Transcript 处理拆分函数以减少全局嵌套。
