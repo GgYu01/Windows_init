@@ -7,6 +7,7 @@
 - 目标：单次或分阶段完成 Defender/防火墙关闭、PowerShell/Windows Terminal 配置、内存&DMA 优化、payload 复制与应用静默安装。
 - 主流程封装为 `Invoke-RootOrchestration`，Transcript 生命周期由 `Start-RootTranscript` / `Stop-RootTranscript` 辅助函数集中管理，兜底捕获未处理异常。
 - 日志输出采用“多落点”：主 Transcript 写入 `C:\ProgramData\WindowsInit\Logs`，并在结束时复制到 `C:\Users\Public\Desktop\WindowsInit-Debug`，同时入口脚本也各自写早期日志用于定位触发链路问题。
+- 介质同步：仓库目录与安装源一致，提供 cmd 脚本一键同步最小内容（`scripts\sync-media.cmd`），并维护最小复制清单（`docs/minimal-copy.md`）。
 
 ## 核心流程
 ```
@@ -39,6 +40,11 @@ SetupComplete.cmd -> RunOnce -> FirstLogonBootstrap.ps1 -> root.ps1 (loader)   #
 - **离线优先**：Windows Terminal 安装前检测 AppX 部署栈可用性以及本地离线依赖（UI.Xaml 2.8 + VCLibs Desktop x86/x64）；缺失即跳过以避免联网拉取或长时间挂起。
 - **降级防御**：Defender 模块被第三方移除时，仅写策略注册表并跳过 `Set/Add/Get-Mp*` 调用，避免日志刷屏但保持防火墙等配置。
 - **MSIX 兼容**：当当前 PowerShell 7 来自 WindowsApps（MSIX），跳过 LocalMachine 执行策略写入，避免对只读包路径的访问拒绝。
+
+## 介质同步与最小清单
+- **最小复制目标**：`Autounattend.xml`、`sources\Autounattend.xml`、`sources\$OEM$\$$\Setup\Scripts\`。
+- **自动化入口**：`scripts\sync-media.cmd` 以 cmd 方式完成复制，适配 WinPE 环境。
+- **可选组件**：WindowsTerminal / DefenderRemover / Payloads 等目录按需同步。
 
 ## 模块与数据流
 - **输入**：本地预置 MSI/EXE、注册表键值、RunOnce 项。

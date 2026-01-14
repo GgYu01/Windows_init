@@ -27,42 +27,46 @@
 
 ## 仓库结构与角色
 
-当前仓库文件：
+当前仓库结构与安装源一致，可直接覆盖到解压后的安装源根目录。
+说明文件（`docs/`、`kms.txt`、`temp_tell.md`）仅用于仓库维护，不必复制到安装源。
 
-- `Autounattend.xml`  
-  - 无盘符路径的无人参与安装应答文件。  
+- `Autounattend.xml`
+  - 无盘符路径的无人参与安装应答文件。
   - 负责：
     - 设置 `windowsPE` 阶段的语言区域；
     - 配置 `oobeSystem` 阶段跳过 OOBE、自动登录 Administrator；
     - 在首次登录时通过 `FirstLogonCommands` 调用 `root.ps1`。
 
-- `SetupComplete.cmd`
+- `sources\Autounattend.xml`
+  - 与根目录内容相同的冗余位置，用于提升 WindowsPE / offlineServicing 阶段的命中率。
+
+- `sources\$OEM$\$$\Setup\Scripts\SetupComplete.cmd`
   - Windows Setup 在安装完成阶段以 SYSTEM 自动执行的脚本：`%WINDIR%\\Setup\\Scripts\\SetupComplete.cmd`。
   - 负责：写入 `HKLM\\...\\RunOnce` 兜底项，在首次交互登录时触发 `FirstLogonBootstrap.ps1`（避免 `FirstLogonCommands` 偶发不执行导致需要手动运行）。
 
-- `FirstLogonBootstrap.ps1`
+- `sources\$OEM$\$$\Setup\Scripts\FirstLogonBootstrap.ps1`
   - `SetupComplete.cmd` 的 RunOnce 入口脚本。
   - 负责：在 `RootPhase=1` 且 Phase2 RunOnce 已存在时主动跳过，避免同一登录会话中“Phase0 刚触发 DefenderRemover、Phase1 又被重复入口提前执行”的时序问题；其余情况转发到 `root.ps1` loader。
   - 支持 `-Probe`：仅写日志并退出（不执行任何安装/配置），用于在系统内验证 RunOnce 是否可靠触发。
   - 支持 `-ProbeChain`：执行“完整链路探针”（Bootstrap → Loader → Core 的 Probe 模式），仍然只写日志不做任何系统修改，用于验证整条链路是否可达。
 
-- `WindowsInitDiagnostics.ps1`
+- `sources\$OEM$\$$\Setup\Scripts\WindowsInitDiagnostics.ps1`
   - 诊断脚本：检查关键文件是否存在、`RootPhase`、RunOnce 项是否已写入。
   - 可选 `-RegisterProbe`：注册一个“只写日志不做任何改动”的 RunOnce 探针，帮助你在不影响现有程序的情况下验证自动触发链路。
   - 可选 `-ProbeMode Chain`：注册完整链路探针（调用 `FirstLogonBootstrap.ps1 -ProbeChain`）。
 
-- `root.ps1`  
-  - PowerShell 版本兼容 loader：在 **安装完成之后、首次自动登录 Administrator 时由 `Autounattend.xml` 调用**，也是 RunOnce 的二阶段入口。  
-  - 当运行在 PowerShell 5.1 时，会优先定位/安装同目录的 `PowerShell-7.5.4-win-x64.msi`，再以 `pwsh.exe` 重启核心脚本；在 7.x 下直接调用核心脚本。  
-  - 不包含业务逻辑，仅负责环境检测、安装与转发。  
+- `sources\$OEM$\$$\Setup\Scripts\root.ps1`
+  - PowerShell 版本兼容 loader：在 **安装完成之后、首次自动登录 Administrator 时由 `Autounattend.xml` 调用**，也是 RunOnce 的二阶段入口。
+  - 当运行在 PowerShell 5.1 时，会优先定位/安装同目录的 `PowerShell-7.5.4-win-x64.msi`，再以 `pwsh.exe` 重启核心脚本；在 7.x 下直接调用核心脚本。
+  - 不包含业务逻辑，仅负责环境检测、安装与转发。
 
-- `root.core.ps1`  
-  - 首启总控脚本（运行于 PowerShell 7），逻辑模块化：每个功能封装为函数，并通过统一的 `Invoke-Step` 包装执行。  
+- `sources\$OEM$\$$\Setup\Scripts\root.core.ps1`
+  - 首启总控脚本（运行于 PowerShell 7），逻辑模块化：每个功能封装为函数，并通过统一的 `Invoke-Step` 包装执行。
   - 关键行为：
     - 在首启一开始尽可能关闭 / 禁用 Defender 与防火墙，并为 `C:\Windows\Setup\Scripts` 与当前用户 `Downloads` 添加宽泛的排除项，避免预置安装包被误删；
-    - 如果检测到 `C:\Windows\Setup\Scripts\DefenderRemover\Script_Run.bat`，会采用 **两阶段首启流程**：  
-      - 第 1 阶段（首次自动登录）：只执行 Defender / 防火墙 / SmartScreen / UAC 配置，向注册表 `HKLM\SOFTWARE\WindowsInit` 写入阶段标记 `RootPhase=1`，并在 `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce` 下注册 `WindowsInit-Phase2`（指向 loader），随后以参数 `y` 调用 `Script_Run.bat` 完成更激进的 Defender 移除并触发重启；  
-      - 第 2 阶段（重启后再次登录）：由 `RunOnce` 再次调用 `root.ps1` loader，自动切换到 PowerShell 7，跳过 Defender 移除阶段，仅执行后续的 PowerShell/Windows Terminal/内存与 DMA 优化、payload 复制与软件安装等配置；  
+    - 如果检测到 `C:\Windows\Setup\Scripts\DefenderRemover\Script_Run.bat`，会采用 **两阶段首启流程**：
+      - 第 1 阶段（首次自动登录）：只执行 Defender / 防火墙 / SmartScreen / UAC 配置，向注册表 `HKLM\SOFTWARE\WindowsInit` 写入阶段标记 `RootPhase=1`，并在 `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce` 下注册 `WindowsInit-Phase2`（指向 loader），随后以参数 `y` 调用 `Script_Run.bat` 完成更激进的 Defender 移除并触发重启；
+      - 第 2 阶段（重启后再次登录）：由 `RunOnce` 再次调用 `root.ps1` loader，自动切换到 PowerShell 7，跳过 Defender 移除阶段，仅执行后续的 PowerShell/Windows Terminal/内存与 DMA 优化、payload 复制与软件安装等配置；
     - 安装 `PowerShell-7.5.4-win-x64.msi` 到系统（如果尚未安装）；
     - 为当前用户写入 Windows PowerShell profile，将交互式会话自动转发到 `pwsh.exe`；
     - 同时配置 Windows PowerShell 与 PowerShell 7 的执行策略为 `Bypass`（7.x 环境下仍通过 `powershell.exe` 设置 5.1 策略）；
@@ -71,25 +75,14 @@
     - 可选运行 `UserCustomization.ps1` 自定义脚本；
     - 将完整输出写入桌面日志文件 `FirstBoot-*.log`。
 
-- `kms.txt`  
-  - 目前仅作为你手动执行命令的备忘，并未在安装/首启流程中自动执行。  
-  - 你可以将其中稳定可用的部分整理后迁移到 `UserCustomization.ps1` 中，由 `root.ps1` 在首启自动执行。
-
-- `PowerShell-7.5.4-win-x64.msi`  
-  - 官方的 PowerShell 7.5.4 x64 MSI 安装包。  
+- `sources\$OEM$\$$\Setup\Scripts\PowerShell-7.5.4-win-x64.msi`
+  - 官方的 PowerShell 7.5.4 x64 MSI 安装包。
   - 在镜像中会被放置到 `C:\Windows\Setup\Scripts\PowerShell-7.5.4-win-x64.msi`，由 `root.ps1` 调用安装。
 
-- `pe_tools.ps1`  
-  - 在带图形界面的 WinPE 中使用的辅助脚本，要求 WinPE 已集成 PowerShell。  
-  - 主要能力：
-    - 生成 5 个长度为 10 的随机十六进制字符串（大写），以及 1 个 `000E` 开头、后续 8 位十六进制的字符串，并写入执行路径下的 `RandomHexIdentifiers.txt`；
-    - 从脚本路径的相对路径 `无序网卡使用教程带工具\驱动\右键安装.inf` 自动安装网卡驱动（等效于右键 INF → 安装）；  
-    - 启动 3 个 GUI 程序（路径均相对于脚本所在目录）：
-      - `无序网卡使用教程带工具\修改程序.exe`
-      - `硬盘PE系统和教程 文件如果无法打开请下载 RAR 解压工具 注意别下广告收费的\第二 SATA 硬盘 这个整个文件夹拷贝到PE桌面\VIUpdateTools.exe`
-      - `主板修改和板载网卡教学\机器猫硬解工具 (1).exe`
+- `sources\$OEM$\$$\Setup\Scripts\Payloads\`
+  - 预置安装包与辅助脚本目录（如 `Set-GpuDeviceDesc.ps1` 与各类安装程序）。
 
-- `Set-GpuDeviceDesc.ps1`
+- `sources\$OEM$\$$\Setup\Scripts\Payloads\Set-GpuDeviceDesc.ps1`
   - 仅用于安装完成后的系统中 **手动执行**，不会在安装或首启阶段自动调用。
   - 功能：根据显卡设备的 InstanceId，将注册表路径
     `HKLM\SYSTEM\CurrentControlSet\Enum\<InstanceId>\DeviceDesc`
@@ -98,7 +91,7 @@
     - 直接指定 `-InstanceId` 参数；
     - 不指定参数时，使用 `Get-PnpDevice -Class Display` 枚举所有显示适配器，供你选择目标设备。
 
-- `Set-MemoryDmaOptimization.ps1`
+- `sources\$OEM$\$$\Setup\Scripts\Set-MemoryDmaOptimization.ps1`
   - 内存管理与 PCIe/DMA 优化脚本，解决游戏高频操作导致的卡顿和 DMA 设备连接问题。
   - **在首启阶段由 `root.ps1` 自动执行核心优化**（一次性注册表配置）。
   - 也可手动执行进行验证或额外配置。
@@ -111,7 +104,7 @@
     - 禁用网络节流和 Nagle 算法
   - 支持 `-WhatIf` 预览模式和 `-ShowCurrentConfig` 查看当前配置。
 
-- `StandbyListMaintenance/`
+- `sources\$OEM$\$$\Setup\Scripts\StandbyListMaintenance\`
   - Standby List 维护子系统，用于定期清理内存 Standby List。
   - **警告**：计划任务功能使用 P/Invoke 调用 `ntdll.dll`，**可能触发反作弊系统检测**。
   - 包含文件：
@@ -119,8 +112,17 @@
     - `Register-StandbyListTask.ps1` - 计划任务注册脚本（15分钟间隔）
   - **推荐用法**：在启动游戏前手动运行 `Clear-StandbyListGradual.ps1 -Force`，而非注册计划任务。
 
----
+- `sources\$OEM$\$$\Setup\Scripts\WindowsTerminal\`
+  - Windows Terminal 预装包目录（包含 msixbundle、license、依赖 appx 等）。
 
+- `sources\$OEM$\$$\Setup\Scripts\DefenderRemover\`
+  - 第三方 Defender Remover 工具目录（放 Script_Run.bat 与其依赖文件）。
+
+- `kms.txt`
+  - 目前仅作为你手动执行命令的备忘，并未在安装/首启流程中自动执行。
+  - 你可以将其中稳定可用的部分整理后迁移到 `UserCustomization.ps1` 中，由 `root.ps1` 在首启自动执行。
+
+---
 ## 内存管理与 DMA 优化模块
 
 ### 问题背景
@@ -163,6 +165,8 @@
 - **不要注册 Standby List 计划任务**，改为在启动游戏前手动运行清理脚本。
 
 ### 使用方法
+
+以下命令在目标系统的 `C:\Windows\Setup\Scripts` 下执行（仓库内对应路径为 `sources\$OEM$\$$\Setup\Scripts`）。
 
 ```powershell
 # （可选）在镜像中集成第三方 Defender Remover：
@@ -213,7 +217,7 @@ Windows 安装程序对 `sources\$OEM$` 目录有约定：
 │           └─ Scripts
 │              ├─ SetupComplete.cmd        ← 兜底触发：写入 RunOnce 调用 FirstLogonBootstrap.ps1
 │              ├─ FirstLogonBootstrap.ps1  ← SetupComplete RunOnce 入口（避免 Phase1 提前跑）
-│              ├─ root.ps1                 ← 来自仓库 root.ps1
+│              ├─ root.ps1                 ← 来自仓库 sources\$OEM$\$$\Setup\Scripts\root.ps1
 │              ├─ root.core.ps1            ← 业务编排主脚本（PowerShell 7）
 │              ├─ Set-MemoryDmaOptimization.ps1  ← 内存/DMA优化脚本（可选手动执行）
 │              ├─ StandbyListMaintenance   ← Standby List 维护子系统
@@ -261,6 +265,9 @@ Windows 安装程序对 `sources\$OEM$` 目录有约定：
 
 ## 仓库内容与镜像集成步骤
 
+快速方式：使用 `scripts\sync-media.cmd` 一键同步最小内容，最小清单见 `docs/minimal-copy.md`。
+
+
 以下假设：
 
 - 官方 ISO 已解压到某个目录，例如 `D:\WinISO`；
@@ -268,12 +275,16 @@ Windows 安装程序对 `sources\$OEM$` 目录有约定：
 
 ### 1. 在镜像根目录集成 Autounattend.xml
 
-将仓库根目录下的 `Autounattend.xml` 复制到 ISO 解压目录根：
+将仓库根目录下的 `Autounattend.xml` 复制到 ISO 解压目录根，并同时写入 `sources\Autounattend.xml`：
 
 ```powershell
 # Windows PowerShell / PowerShell 7 示例
 Copy-Item -Path "C:\path\to\Windows_init\Autounattend.xml" `
           -Destination "D:\WinISO\Autounattend.xml" `
+          -Force
+
+Copy-Item -Path "C:\path\to\Windows_init\sources\Autounattend.xml" `
+          -Destination "D:\WinISO\sources\Autounattend.xml" `
           -Force
 ```
 
@@ -287,17 +298,17 @@ $scripts = Join-Path $isoRoot "sources\$OEM$\$$\Setup\Scripts"
 
 New-Item -Path $scripts -ItemType Directory -Force | Out-Null
 
-Copy-Item "C:\path\to\Windows_init\root.ps1" `
+Copy-Item "C:\path\to\Windows_init\sources\$OEM$\$$\Setup\Scripts\root.ps1" `
           (Join-Path $scripts "root.ps1") -Force
 
-Copy-Item "C:\path\to\Windows_init\PowerShell-7.5.4-win-x64.msi" `
+Copy-Item "C:\path\to\Windows_init\sources\$OEM$\$$\Setup\Scripts\PowerShell-7.5.4-win-x64.msi" `
           (Join-Path $scripts "PowerShell-7.5.4-win-x64.msi") -Force
 ```
 
 如果你还需要自动执行自己的扩展逻辑（例如 KMS、额外注册表设置等），可以在仓库中创建 `UserCustomization.ps1`，然后一并复制：
 
 ```powershell
-Copy-Item "C:\path\to\Windows_init\UserCustomization.ps1" `
+Copy-Item "C:\path\to\Windows_init\sources\$OEM$\$$\Setup\Scripts\UserCustomization.ps1" `
           (Join-Path $scripts "UserCustomization.ps1") -Force
 ```
 
@@ -331,7 +342,7 @@ foreach ($name in $files) {
 }
 ```
 
-> **说明**：这些 payload 不需要放入 Git 仓库，只需要在构建安装介质时按照上述命名复制到 `Payloads` 目录即可。
+> **说明**：若希望把 payload 一起纳入仓库，建议启用 Git LFS（见 `docs/large-files.md`）；否则可在构建介质时手动拷贝到 `Payloads` 目录。
 
 ### 4. 是否需要重新封装 ISO
 
@@ -351,6 +362,8 @@ foreach ($name in $files) {
 
 ## 使用 WinPE 或 PE U 盘进行安装的工作流
 
+WinPE 不保证 PowerShell 可用，本仓库的 PE 使用场景仅依赖 cmd，已移除 PowerShell 专用的 PE 脚本。
+
 你的问题是：是否可以 **在 PE 环境中解压官方 Windows 镜像，直接将新增文件写入解压路径，然后不重新封装 WIM，直接运行 setup 并指定安装磁盘**。
 
 从 Windows Setup 机制分析：
@@ -362,7 +375,7 @@ foreach ($name in $files) {
 因此，典型流程如下：
 
 1. 在任意环境（Windows / Linux）中将官方 ISO 解压到某个目录（如 `D:\WinISO`）。  
-2. 按前面说明，将本仓库的内容（`Autounattend.xml`、`root.ps1`、`MSI`、`Payloads` 等）复制到该目录及其子目录。  
+2. 按前面说明，将本仓库的内容（`Autounattend.xml`、`sources\Autounattend.xml`、`sources\$OEM$\$$\Setup\Scripts` 及其子目录）复制到该目录及其子目录。  
 3. 将 `D:\WinISO` 完整复制到 PE U 盘上的某个目录（例如 `X:\WinSrc`），或直接作为 U 盘根。  
 4. 使用 PE U 盘启动目标机器，在 PE 中：
 
@@ -380,58 +393,6 @@ foreach ($name in $files) {
 
 > **结论**：  
 > 你完全可以使用“解压后的安装源 + 文件系统级复制 + 不修改 WIM”模式，配合本仓库内容，实现自动安装与首启定制，无需每次重新封装 install.wim。
-
----
-
-## 在 WinPE 中使用 `pe_tools.ps1`
-
-前提假设：
-
-- 你的 WinPE 为带图形界面的版本，并已集成 PowerShell（通常是 WinPE-HTA 或基于 ADK 自行添加 PowerShell 组件后构建的镜像）。
-- 与 `pe_tools.ps1` 同级或子目录下，已经放置以下目录/文件：
-  - `无序网卡使用教程带工具\驱动\右键安装.inf`
-  - `无序网卡使用教程带工具\修改程序.exe`
-  - `硬盘PE系统和教程 文件如果无法打开请下载 RAR 解压工具 注意别下广告收费的\第二 SATA 硬盘 这个整个文件夹拷贝到PE桌面\VIUpdateTools.exe`
-  - `主板修改和板载网卡教学\机器猫硬解工具 (1).exe`
-
-推荐的目录结构示例（在 PE 环境中挂载后）：
-
-```text
-X:\Tools
-├─ pe_tools.ps1
-├─ 无序网卡使用教程带工具
-│  ├─ 修改程序.exe
-│  └─ 驱动
-│     └─ 右键安装.inf
-├─ 硬盘PE系统和教程 文件如果无法打开请下载 RAR 解压工具 注意别下广告收费的
-│  └─ 第二 SATA 硬盘 这个整个文件夹拷贝到PE桌面
-│     └─ VIUpdateTools.exe
-└─ 主板修改和板载网卡教学
-   └─ 机器猫硬解工具 (1).exe
-```
-
-在 WinPE 中使用步骤：
-
-```powershell
-# 1. 打开 WinPE 中的 PowerShell（如通过开始菜单或 Run 对话框）
-
-# 2. 切换到工具目录
-Set-Location X:\Tools
-
-# 3. 临时放宽执行策略（仅当前进程）
-Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
-
-# 4. 执行脚本
-.\pe_tools.ps1
-```
-
-运行结果：
-
-- 在脚本所在目录生成 `RandomHexIdentifiers.txt`，内容包括：
-  - 5 行，每行 10 个大写十六进制字符；
-  - 第 6 行，形如 `000E1234ABCD` 的字符串（`000E` + 8 位随机十六进制，大写）。
-- 使用 `rundll32.exe setupapi,InstallHinfSection` 静默安装 `右键安装.inf` 指定的网卡驱动。
-- 启动 3 个 GUI 程序到前台，便于你在 WinPE 中进行进一步的交互操作。
 
 ---
 
@@ -485,6 +446,9 @@ Invoke-Step -Name 'Invoke user customization script'      -Action { Invoke-UserC
 - `docs/design.md`：首启编排设计、数据流与兼容性说明。
 - `docs/decision-log.md`：关键决策与灵感记录，含日期与影响范围。
 - `docs/handover.md`：开发者交接手册，覆盖解析校验、修改指南与常见故障切入点。
+- `docs/large-files.md`：大文件与 Git LFS 使用说明。
+- `docs/minimal-copy.md`：最小复制清单与可选组件说明。
+- `docs/sync-script.md`：一键同步脚本（cmd）说明。
 
 ---
 

@@ -1,0 +1,10 @@
+*.wim filter=lfs diff=lfs merge=lfs -text
+*.esd filter=lfs diff=lfs merge=lfs -text
+*.iso filter=lfs diff=lfs merge=lfs -text
+*.msi filter=lfs diff=lfs merge=lfs -text
+*.zip filter=lfs diff=lfs merge=lfs -text
+*.exe filter=lfs diff=lfs merge=lfs -text
+sources/$OEM$/$$/Setup/Scripts/Payloads/Defender_Control_2.1.0_Single/** filter=lfs diff=lfs merge=lfs -text
+sources/$OEM$/$$/Setup/Scripts/Payloads/Sunshine/** filter=lfs diff=lfs merge=lfs -text
+sources/$OEM$/$$/Setup/Scripts/DefenderRemover/** filter=lfs diff=lfs merge=lfs -text
+sources/$OEM$/$$/Setup/Scripts/WindowsTerminal/** filter=lfs diff=lfs merge=lfs -text

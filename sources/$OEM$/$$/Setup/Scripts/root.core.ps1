@@ -175,28 +175,208 @@ function Get-DownloadsPath {
     return $downloads
 }
 
+function Get-PwshCandidateVersion {
+    param([string]$Name)
+
+    $version = [version]'0.0.0'
+    if ($Name -match 'PowerShell-([0-9]+(?:\.[0-9]+)+)') {
+        try { $version = [version]$Matches[1] } catch { $version = [version]'0.0.0' }
+    }
+
+    return $version
+}
+
+function Resolve-PwshInstaller {
+    param(
+        [string]$PreferredName = 'PowerShell-7.5.4-win-x64.msi'
+    )
+
+    $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath } else { (Get-Location).Path }
+    $searchRoots = @(
+        $scriptDir,
+        (Join-Path -Path $scriptDir -ChildPath 'Payloads'),
+        'C:\Windows\Setup\Scripts',
+        'C:\Windows\Setup\Scripts\Payloads'
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique
+
+    $preferredPath = $null
+    foreach ($root in $searchRoots) {
+        $candidate = Join-Path -Path $root -ChildPath $PreferredName
+        if (Test-Path -LiteralPath $candidate) {
+            $preferredPath = $candidate
+            break
+        }
+    }
+
+    if ($preferredPath) {
+        return [pscustomobject]@{
+            Path = $preferredPath
+            Extension = ([IO.Path]::GetExtension($preferredPath)).ToLowerInvariant()
+            Version = Get-PwshCandidateVersion -Name (Split-Path -Leaf $preferredPath)
+            Source = 'preferred'
+        }
+    }
+
+    $patterns = @('PowerShell-*-win-x64*.msi', 'PowerShell-*-win-x64*.zip')
+    $seen = @{}
+    $candidates = @()
+
+    foreach ($root in $searchRoots) {
+        foreach ($pattern in $patterns) {
+            $items = Get-ChildItem -Path $root -Filter $pattern -File -ErrorAction SilentlyContinue
+            foreach ($item in $items) {
+                if ($seen.ContainsKey($item.FullName)) { continue }
+                $seen[$item.FullName] = $true
+                $candidates += [pscustomobject]@{
+                    Path = $item.FullName
+                    Extension = $item.Extension.ToLowerInvariant()
+                    Version = Get-PwshCandidateVersion -Name $item.Name
+                    LastWriteTimeUtc = $item.LastWriteTimeUtc
+                    Source = 'discovered'
+                }
+            }
+        }
+    }
+
+    if ($candidates.Count -eq 0) {
+        return $null
+    }
+
+    foreach ($candidate in $candidates) {
+        Write-LogInfo ("PowerShell installer candidate: {0} (version={1}, ext={2})" -f $candidate.Path, $candidate.Version, $candidate.Extension)
+    }
+
+    $priority = @{ '.msi' = 0; '.zip' = 1 }
+    $selected = $candidates | Sort-Object `
+        @{ Expression = { if ($priority.ContainsKey($_.Extension)) { $priority[$_.Extension] } else { 9 } }; Ascending = $true }, `
+        @{ Expression = { $_.Version }; Descending = $true }, `
+        @{ Expression = { $_.LastWriteTimeUtc }; Descending = $true } | Select-Object -First 1
+
+    return $selected
+}
+
+function Install-PwshFromZip {
+    param([string]$ZipPath)
+
+    $expandCmd = Get-Command -Name 'Expand-Archive' -ErrorAction SilentlyContinue
+    if (-not $expandCmd) {
+        Write-LogWarn "Expand-Archive is not available; cannot unpack PowerShell zip."
+        return $null
+    }
+
+    $programData = if ($env:ProgramData) { $env:ProgramData } else { 'C:\ProgramData' }
+    $tempRoot = Join-Path -Path $programData -ChildPath 'WindowsInit\Temp'
+    $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $extractRoot = Join-Path -Path $tempRoot -ChildPath ("PwshZip-{0}" -f $timestamp)
+    $null = New-Item -Path $extractRoot -ItemType Directory -Force -ErrorAction SilentlyContinue
+
+    Write-LogInfo ("Expanding PowerShell zip '{0}' to '{1}'." -f $ZipPath, $extractRoot)
+
+    try {
+        Expand-Archive -Path $ZipPath -DestinationPath $extractRoot -Force
+    }
+    catch {
+        Write-LogError "Expand-Archive failed: $($_.Exception.Message)"
+        return $null
+    }
+
+    $sourceRoot = $null
+    if (Test-Path -LiteralPath (Join-Path -Path $extractRoot -ChildPath 'pwsh.exe')) {
+        $sourceRoot = $extractRoot
+    }
+    else {
+        $childDirs = Get-ChildItem -Path $extractRoot -Directory -ErrorAction SilentlyContinue
+        foreach ($dir in $childDirs) {
+            $candidatePwsh = Join-Path -Path $dir.FullName -ChildPath 'pwsh.exe'
+            if (Test-Path -LiteralPath $candidatePwsh) {
+                $sourceRoot = $dir.FullName
+                break
+            }
+        }
+    }
+
+    if (-not $sourceRoot) {
+        Write-LogError "pwsh.exe not found in extracted zip payload."
+        return $null
+    }
+
+    $installRoot = if ($env:ProgramFiles) { Join-Path -Path $env:ProgramFiles -ChildPath 'PowerShell\\7' } else { 'C:\Program Files\PowerShell\7' }
+    $null = New-Item -Path $installRoot -ItemType Directory -Force -ErrorAction SilentlyContinue
+
+    try {
+        Copy-Item -Path (Join-Path -Path $sourceRoot -ChildPath '*') -Destination $installRoot -Recurse -Force
+    }
+    catch {
+        Write-LogError "Failed to copy PowerShell files: $($_.Exception.Message)"
+        return $null
+    }
+
+    try {
+        Remove-Item -Path $extractRoot -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+    catch {
+        # Ignore cleanup failures.
+    }
+
+    return (Join-Path -Path $installRoot -ChildPath 'pwsh.exe')
+}
+
 function Install-PowerShell7 {
-    # Install PowerShell 7.5.4 from local MSI if not already installed.
+    # Install PowerShell 7 from local MSI/zip if not already installed.
     $existing = Get-Command -Name 'pwsh.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($existing) {
-        Write-LogInfo "PowerShell 7 already present at '$($existing.Source)'; skipping MSI installation."
+        Write-LogInfo "PowerShell 7 already present at '$($existing.Source)'; skipping installation."
         return
     }
 
-    $msiPath = 'C:\Windows\Setup\Scripts\PowerShell-7.5.4-win-x64.msi'
-    if (-not (Test-Path -LiteralPath $msiPath)) {
-        throw "MSI not found at '$msiPath'."
+    $fallback = $null
+    if ($env:ProgramFiles) {
+        $fallback = Join-Path -Path $env:ProgramFiles -ChildPath 'PowerShell\7\pwsh.exe'
+        if (Test-Path -LiteralPath $fallback) {
+            Write-LogInfo "PowerShell 7 already present at '$fallback'; skipping installation."
+            return
+        }
     }
 
-    $arguments = "/i `"$msiPath`" /qn ADD_PATH=1 ENABLE_PSREMOTING=1 REGISTER_MANIFEST=1"
-    Write-LogInfo "Installing PowerShell 7 from '$msiPath'..."
-
-    $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $arguments -Wait -PassThru
-    if ($process.ExitCode -ne 0) {
-        throw "msiexec exited with code $($process.ExitCode)."
+    $installer = Resolve-PwshInstaller
+    if (-not $installer) {
+        Write-LogWarn "PowerShell installer not found in expected locations; skipping installation."
+        return
     }
 
-    Write-LogInfo "PowerShell 7 MSI installation finished with exit code 0."
+    Write-LogInfo ("Selected PowerShell installer: '{0}' (ext={1}, version={2})." -f $installer.Path, $installer.Extension, $installer.Version)
+
+    if ($installer.Extension -eq '.msi') {
+        $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        $programData = if ($env:ProgramData) { $env:ProgramData } else { 'C:\ProgramData' }
+        $msiLogDir = Join-Path -Path $programData -ChildPath 'WindowsInit\Logs'
+        $null = New-Item -Path $msiLogDir -ItemType Directory -Force -ErrorAction SilentlyContinue
+        $msiLogPath = Join-Path -Path $msiLogDir -ChildPath ("PowerShell7-MSI-{0}.log" -f $timestamp)
+
+        $arguments = "/i `"$($installer.Path)`" /qn /norestart ADD_PATH=1 ENABLE_PSREMOTING=1 REGISTER_MANIFEST=1 /l*v `"$msiLogPath`""
+        Write-LogInfo "Installing PowerShell 7 from MSI..."
+        Write-LogInfo ("PowerShell 7 MSI log: '{0}'." -f $msiLogPath)
+
+        $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $arguments -Wait -PassThru
+        if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
+            throw "msiexec exited with code $($process.ExitCode)."
+        }
+
+        Write-LogInfo "PowerShell 7 MSI installation finished."
+        return
+    }
+
+    if ($installer.Extension -eq '.zip') {
+        Write-LogInfo "Installing PowerShell 7 from zip payload..."
+        $zipResult = Install-PwshFromZip -ZipPath $installer.Path
+        if (-not $zipResult) {
+            throw "PowerShell zip installation failed."
+        }
+        Write-LogInfo "PowerShell 7 zip installation finished."
+        return
+    }
+
+    Write-LogWarn ("Unsupported PowerShell installer type: {0}" -f $installer.Extension)
 }
 
 function Configure-PowerShellDefaults {
@@ -867,12 +1047,15 @@ function Copy-PayloadsToDownloads {
         'Sunshine',
         '7z2501-x64.exe',
         '581.57-desktop-win10-win11-64bit-international-dch-whql.exe',
+        'Havuk_change_v5_0_1.exe',
         'Kook_PC_Setup_v0.99.0.0.exe',
         'MSIAfterburner-64-4.6.5.exe',
         'QQ9.7.25.29411.exe',
         'Set-GpuDeviceDesc.ps1',
         'ShareX-17.1.0-setup.exe',
         'SteamSetup.exe',
+        'ToDesk_4.8.3.4.exe',
+        'UU-5.69.0.exe',
         'uuyc_4.8.2.exe',
         'VC_redist.x64.exe',
         'VC_redist.x86.exe'
@@ -901,6 +1084,56 @@ function Copy-PayloadsToDownloads {
         catch {
             Write-LogError "Failed to copy payload '$name' from '$src' to '$dst': $($_.Exception.Message)"
         }
+    }
+}
+
+function Invoke-InstallerWithTimeout {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string]$Arguments = '',
+        [int]$TimeoutSeconds = 300
+    )
+
+    Write-LogInfo ("Starting {0} installer from '{1}'..." -f $Name, $FilePath)
+
+    $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments -PassThru
+    if (-not $process -or -not $process.Id) {
+        Write-LogWarn ("{0} installer process handle not available; continuing without wait." -f $Name)
+        return
+    }
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ($true) {
+        try {
+            if ($process.HasExited) { break }
+        }
+        catch {
+            break
+        }
+
+        if ((Get-Date) -ge $deadline) {
+            Write-LogWarn ("{0} installer did not exit within {1}s; terminating process tree (PID {2})." -f $Name, $TimeoutSeconds, $process.Id)
+            try {
+                Start-Process -FilePath 'taskkill.exe' -ArgumentList "/PID $($process.Id) /T /F" -Wait -PassThru | Out-Null
+                Write-LogWarn ("{0} installer process tree terminated; continuing." -f $Name)
+            }
+            catch {
+                Write-LogError ("Failed to terminate {0} installer: {1}" -f $Name, $_.Exception.Message)
+            }
+            return
+        }
+
+        Start-Sleep -Seconds 2
+        try { $process.Refresh() } catch { }
+    }
+
+    $exitCode = $process.ExitCode
+    if ($exitCode -eq 0) {
+        Write-LogInfo ("{0} installation completed with exit code 0." -f $Name)
+    }
+    else {
+        Write-LogError ("{0} installer exited with code {1}." -f $Name, $exitCode)
     }
 }
 
@@ -937,18 +1170,33 @@ function Install-Applications {
     # 7-Zip (7z2501-x64.exe) - standard silent install switch /S
     $sevenZipExe = Join-Path -Path $payloadRoot -ChildPath '7z2501-x64.exe'
     if (Test-Path -LiteralPath $sevenZipExe) {
-        try {
-            Write-LogInfo "Installing 7-Zip from '$sevenZipExe'..."
-            $p = Start-Process -FilePath $sevenZipExe -ArgumentList '/S' -Wait -PassThru
-            if ($p.ExitCode -eq 0) {
-                Write-LogInfo "7-Zip installation completed with exit code 0."
-            }
-            else {
-                Write-LogError "7-Zip installer exited with code $($p.ExitCode)."
+        $sevenZipInstalled = $false
+        $sevenZipPaths = @()
+        if ($env:ProgramFiles) { $sevenZipPaths += (Join-Path -Path $env:ProgramFiles -ChildPath '7-Zip\\7z.exe') }
+        if ($env:ProgramW6432 -and $env:ProgramW6432 -ne $env:ProgramFiles) {
+            $sevenZipPaths += (Join-Path -Path $env:ProgramW6432 -ChildPath '7-Zip\\7z.exe')
+        }
+        $programFilesX86 = ${env:ProgramFiles(x86)} # Use braced env var name to avoid parser errors with parentheses.
+        if ($programFilesX86) {
+            $sevenZipPaths += (Join-Path -Path $programFilesX86 -ChildPath '7-Zip\\7z.exe')
+        }
+        foreach ($candidate in ($sevenZipPaths | Where-Object { $_ } | Select-Object -Unique)) {
+            if (Test-Path -LiteralPath $candidate) {
+                $sevenZipInstalled = $true
+                break
             }
         }
-        catch {
-            Write-LogError "7-Zip installation failed: $($_.Exception.Message)"
+
+        if ($sevenZipInstalled) {
+            Write-LogInfo "7-Zip already installed; skipping."
+        }
+        else {
+            try {
+                Invoke-InstallerWithTimeout -Name '7-Zip' -FilePath $sevenZipExe -Arguments '/S' -TimeoutSeconds 300
+            }
+            catch {
+                Write-LogError "7-Zip installation failed: $($_.Exception.Message)"
+            }
         }
     }
     else {

@@ -2,21 +2,21 @@
 
 ## 环境准备
 - 建议在 Windows 10/11 + PowerShell 5.1/7.x 下验证；Linux 仅用于静态解析。
-- 核心文件：`Autounattend.xml`（主触发）、`SetupComplete.cmd` + `FirstLogonBootstrap.ps1`（兜底触发）、`root.ps1`（5.1/7.x 兼容 loader，负责安装/调用 pwsh）、`root.core.ps1`（首启编排主逻辑）、`Payloads/`（离线安装包）。
+- 核心文件：`Autounattend.xml`（主触发）、`sources\$OEM$\$$\Setup\Scripts\SetupComplete.cmd` + `sources\$OEM$\$$\Setup\Scripts\FirstLogonBootstrap.ps1`（兜底触发）、`sources\$OEM$\$$\Setup\Scripts\root.ps1`（5.1/7.x 兼容 loader，负责安装/调用 pwsh）、`sources\$OEM$\$$\Setup\Scripts\root.core.ps1`（首启编排主逻辑）、`sources\$OEM$\$$\Setup\Scripts\Payloads\`（离线安装包）。
 
 ## 快速检查
-1. 静态解析（Linux 亦可）：`pwsh -NoLogo -NoProfile -Command "[System.Management.Automation.Language.Parser]::ParseFile('root.ps1',[ref]$null,[ref]$null);[System.Management.Automation.Language.Parser]::ParseFile('root.core.ps1',[ref]$null,[ref]$null)"`（无输出即通过）。
-2. Loader 自检（在隔离 VM 上进行）：确认 `PowerShell-7.5.4-win-x64.msi` 与 `root.core.ps1` 同目录；用 `powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\\root.ps1` 观察是否自动安装/定位 `pwsh.exe`，退出码为 0。
+1. 静态解析（Linux 亦可）：`pwsh -NoLogo -NoProfile -Command "[System.Management.Automation.Language.Parser]::ParseFile('sources\$OEM$\$$\Setup\Scripts\root.ps1',[ref]$null,[ref]$null);[System.Management.Automation.Language.Parser]::ParseFile('sources\$OEM$\$$\Setup\Scripts\root.core.ps1',[ref]$null,[ref]$null)"`（无输出即通过）。
+2. Loader 自检（在隔离 VM 上进行）：确认 `sources\$OEM$\$$\Setup\Scripts\PowerShell-7.5.4-win-x64.msi` 与 `sources\$OEM$\$$\Setup\Scripts\root.core.ps1` 同目录；用 `powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\\sources\$OEM$\$$\Setup\Scripts\root.ps1` 观察是否自动安装/定位 `pwsh.exe`，退出码为 0。
 3. 逻辑入口：核心脚本末尾已调用 `Invoke-RootOrchestration`，无需额外入口。
 4. 关注日志：
    - 主 Transcript：`C:\ProgramData\WindowsInit\Logs\FirstBoot-*.log`
    - 桌面可见副本：`C:\Users\Public\Desktop\WindowsInit-Debug\`
    - 入口级早期日志：`SetupComplete-*` / `FirstLogonBootstrap-*` / `RootLoader-*`（用于判断是否“未触发/早退”）
-5. Windows Terminal 离线包自检：`WindowsTerminal/` 需包含 msixbundle、License、`Microsoft.UI.Xaml.2.8_*` x86/x64、`Microsoft.VCLibs.*Desktop*` x86/x64；缺失任一或 AppX 栈被裁剪时脚本会跳过安装与预配。
+5. Windows Terminal 离线包自检：`sources\$OEM$\$$\Setup\Scripts\WindowsTerminal\` 需包含 msixbundle、License、`Microsoft.UI.Xaml.2.8_*` x86/x64、`Microsoft.VCLibs.*Desktop*` x86/x64；缺失任一或 AppX 栈被裁剪时脚本会跳过安装与预配。
 6. 触发自检：确认 `%WINDIR%\\Setup\\Scripts\\SetupComplete.cmd` 与 `%WINDIR%\\Setup\\Scripts\\FirstLogonBootstrap.ps1` 存在并可写入 `HKLM\\...\\RunOnce\\WindowsInit-Phase0`；若同时存在 `FirstLogonCommands`，兜底入口会在 `RootPhase=1` 且 Phase2 RunOnce 已排队时自动跳过。
 7. 无侵入验证（不影响现有下载/已装程序）：
-   - 基础探针：`WindowsInitDiagnostics.ps1 -RegisterProbe -Scope User -ProbeMode Bootstrap`
-   - 完整链路探针：`WindowsInitDiagnostics.ps1 -RegisterProbe -Scope User -ProbeMode Chain`
+   - 基础探针：`C:\Windows\Setup\Scripts\WindowsInitDiagnostics.ps1 -RegisterProbe -Scope User -ProbeMode Bootstrap`
+   - 完整链路探针：`C:\Windows\Setup\Scripts\WindowsInitDiagnostics.ps1 -RegisterProbe -Scope User -ProbeMode Chain`
    - 然后注销/重新登录，检查 `WindowsInit-Debug` 是否出现对应日志（Probe/ProbeChain 均只写日志并退出）。
 
 ## 修改指引
@@ -33,6 +33,7 @@
 
 ## 打包与部署
 - 按 README 的 $OEM$ 布局将脚本与 payload 置于 `sources\\$OEM$\\$$\\Setup\\Scripts`。
+- 可直接执行 `scripts\\sync-media.cmd <ISO_ROOT>` 一键同步最小内容。
 - 如需两阶段执行，确保 `DefenderRemover` 目录完整并包含 `Script_Run.bat`/`Defender.Remover.exe`。
 
 ## 常见故障切入点

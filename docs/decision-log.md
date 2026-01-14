@@ -2,6 +2,7 @@
 
 | 日期 (UTC+0) | 决策/灵感 | 背景 | 影响 |
 | --- | --- | --- | --- |
+| 2026-01-14 | 仓库结构对齐安装源目录，移除 PE PowerShell 脚本，补充最小清单与 cmd 同步脚本，并启用目录级 LFS | 需要在 PE 中直接运行解压后的安装源，且 PowerShell 不一定可用；仓库需与镜像目录一致以便直接复制 | `sources\$OEM$\$$\Setup\Scripts` 成为唯一脚本入口路径；新增最小清单与一键同步脚本；对 DefenderRemover/WindowsTerminal/关键 Payload 目录启用 LFS 追踪以控制 `.git` 体积 |
 | 2025-12-14 | 强化“触发链路可观测性”：多落点日志 + Probe 验证脚本 | 仍出现“开机不自动执行且桌面无日志”，需要区分：入口未触发 / 触发但早退 / 触发但日志写错位置；同时重装成本高 | SetupComplete/Bootstrap/Loader 先写调试日志，root.core 主 Transcript 落盘到 ProgramData 并复制到 Public Desktop；提供 `WindowsInitDiagnostics.ps1` + `-Probe` 在不影响现有程序的前提下验证 RunOnce 是否工作 |
 | 2025-12-13 | 新增 `SetupComplete.cmd` + `FirstLogonBootstrap.ps1` 写入 Phase0 RunOnce 作为兜底触发，并在 `root.core.ps1` 增加 `RootPhase>=2` 幂等退出与命名 Mutex | 目标机出现“安装后未自动执行 root.ps1”的偶发现象；同时多入口触发可能导致并发或时序串扰 | 不依赖单一入口，首启可自愈；避免并发重复安装/写注册表；两阶段场景下避免 Phase1 被重复入口提前执行 |
 | 2025-12-13 | 修复 Windows Terminal 离线依赖合并逻辑：强制数组化避免 `FileInfo + FileInfo` | `Get-ChildItem` 仅匹配 1 个依赖文件时变量为 `FileInfo`，使用 `+` 触发 `op_Addition` 崩溃 | Windows Terminal 安装步骤不再因依赖数量为 1 而中断；离线安装路径更稳定 |

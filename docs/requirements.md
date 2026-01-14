@@ -19,6 +19,8 @@
 | R10 | 首启自动触发需可自愈：即使 `FirstLogonCommands` 未执行也能在首次交互登录自动跑 `root.ps1` | 高 | 完成 | 新增 `SetupComplete.cmd` + `FirstLogonBootstrap.ps1` 写入 RunOnce 兜底并规避两阶段时序串扰；`root.core.ps1` 增加 `RootPhase>=2` 幂等退出与互斥锁防并发 |
 | R11 | Steam 在所有静默安装任务中应最高优先级启动 | 中 | 完成 | 将 Steam 安装移动到 `Install-Applications` 的第一位并保持后台启动 |
 | R12 | 增强首启可观测性：即使未生成用户桌面 Transcript，也必须能定位触发链路与早退原因 | 高 | 完成 | SetupComplete/Bootstrap/Loader 写入 Public Desktop + ProgramData 调试日志；root.core 主 Transcript 落盘到 ProgramData 并复制到 Public Desktop；新增 `WindowsInitDiagnostics.ps1` + `-Probe` 无侵入验证 |
+| R13 | 仓库结构与镜像目录一致，便于直接复制；移除 PE PowerShell 脚本；大文件使用 Git LFS 管理 | 中 | 完成 | 仓库新增 `sources\$OEM$\$$\Setup\Scripts` 布局并同步实际镜像文件；移除 `pe_tools.ps1`；新增 `.gitattributes` 与 `docs/large-files.md` |
+| R14 | 提供“最小复制清单”和 cmd 一键同步脚本，适配 WinPE 无 PowerShell 场景 | 中 | 完成 | 新增 `docs/minimal-copy.md`、`docs/sync-script.md` 与 `scripts/sync-media.cmd` |
 
 ## 用户故事
 - 作为镜像自动化维护者，我需要 `root.ps1` 在首次登录时可以无语法错误地执行，以便所有配置步骤可顺利跑完。
@@ -26,9 +28,11 @@
 - 作为重装成本很高的使用者，我需要一种在现有系统内可重复验证“触发链路是否工作”的方式，并且该验证不能影响我已下载/已安装的软件。
 - 作为游戏环境维护者，我希望 Steam 尽早启动安装，避免后续步骤异常或重启导致安装优先级下降。
 - 作为运维工程师，我希望日志采集在脚本异常时也能安全关闭，避免阻塞后续动作。
-- 作为新加入的开发者，我需要一套中文文档来理解系统设计、演进决策与接手步骤。
+- 作为新加入的开发者，我需要一套中文文档来理解系统设计、演进决策与接手步骤。    
+- 作为在 WinPE 中操作的使用者，我需要 cmd 方式的一键同步与最小清单，避免手动反复对照路径。
 
 ## 待办与后续验证
+- [ ] 在 WinPE 中用 cmd 执行 `scripts\sync-media.cmd <ISO_ROOT>`，确认最小内容同步无误。
 - [ ] 在目标 Windows 机器上以 PowerShell 5.1 运行解析测试，确认 loader 可自动安装并调用 PowerShell 7。
 - [ ] 在“现有已安装系统”上跑一次 `WindowsInitDiagnostics.ps1 -RegisterProbe -Scope User`，验证 Probe 日志是否在下次登录出现在 `C:\\Users\\Public\\Desktop\\WindowsInit-Debug`。
 - [ ] 若未来新增步骤，需同步更新 `docs/design.md` 的流程图与 `docs/decision-log.md` 的决策条目。

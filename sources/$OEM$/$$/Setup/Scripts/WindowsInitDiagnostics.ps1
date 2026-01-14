@@ -149,11 +149,51 @@ Write-DiagnosticsLog -Level 'INFO' -Message ("User='{0}\\{1}', PID={2}, PSVersio
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath } else { (Get-Location).Path }
 Write-DiagnosticsLog -Level 'INFO' -Message ("ScriptRoot='{0}'" -f $scriptRoot) -Targets $logTargets
 
-$expectedFiles = @('root.ps1', 'root.core.ps1', 'SetupComplete.cmd', 'FirstLogonBootstrap.ps1', 'WindowsInitDiagnostics.ps1')
+$expectedFiles = @(
+    'root.ps1',
+    'root.core.ps1',
+    'SetupComplete.cmd',
+    'FirstLogonBootstrap.ps1',
+    'WindowsInitDiagnostics.ps1'
+)
 foreach ($name in $expectedFiles) {
     $path = Join-Path -Path $scriptRoot -ChildPath $name
     $exists = Test-Path -LiteralPath $path
     Write-DiagnosticsLog -Level 'INFO' -Message ("File '{0}': exists={1} path='{2}'" -f $name, $exists, $path) -Targets $logTargets
+}
+
+$installerRoots = @(
+    $scriptRoot,
+    (Join-Path -Path $scriptRoot -ChildPath 'Payloads'),
+    'C:\Windows\Setup\Scripts',
+    'C:\Windows\Setup\Scripts\Payloads'
+) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique
+
+$pwshInstallerPatterns = @('PowerShell-*-win-x64*.msi', 'PowerShell-*-win-x64*.zip')
+$pwshInstallers = @()
+foreach ($root in $installerRoots) {
+    foreach ($pattern in $pwshInstallerPatterns) {
+        $pwshInstallers += Get-ChildItem -Path $root -Filter $pattern -File -ErrorAction SilentlyContinue
+    }
+}
+
+if ($pwshInstallers.Count -eq 0) {
+    Write-DiagnosticsLog -Level 'WARN' -Message 'No PowerShell offline installer was discovered (msi/zip).' -Targets $logTargets
+}
+else {
+    foreach ($item in ($pwshInstallers | Sort-Object -Property FullName -Unique)) {
+        Write-DiagnosticsLog -Level 'INFO' -Message ("PowerShell installer candidate: {0}" -f $item.FullName) -Targets $logTargets
+    }
+}
+
+$pwshCandidates = @()
+if ($env:ProgramFiles) { $pwshCandidates += (Join-Path -Path $env:ProgramFiles -ChildPath 'PowerShell\\7\\pwsh.exe') }
+if ($env:ProgramW6432) { $pwshCandidates += (Join-Path -Path $env:ProgramW6432 -ChildPath 'PowerShell\\7\\pwsh.exe') }
+if ($env:LOCALAPPDATA) { $pwshCandidates += (Join-Path -Path $env:LOCALAPPDATA -ChildPath 'Microsoft\\WindowsApps\\pwsh.exe') }
+
+foreach ($path in ($pwshCandidates | Where-Object { $_ } | Select-Object -Unique)) {
+    $exists = Test-Path -LiteralPath $path
+    Write-DiagnosticsLog -Level 'INFO' -Message ("pwsh candidate: exists={0} path='{1}'" -f $exists, $path) -Targets $logTargets
 }
 
 $rootPhase = Get-RootPhase
